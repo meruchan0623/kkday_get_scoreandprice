@@ -1,0 +1,28 @@
+{
+  "status": 200,
+  "message": "success",
+  "data": {
+    "packages": {
+      "476215": {
+        "pkg_oid": 476215,
+        "calendar": {
+          "2026-07-22": {
+            "date": "2026-07-22",
+            "min_price": 711,
+            "base_min_price": 711
+          }
+        }
+      },
+      "1982144": {
+        "pkg_oid": 1982144,
+        "calendar": {
+          "2026-07-22": {
+            "date": "2026-07-22",
+            "min_price": 10741,
+            "base_min_price": 10741
+          }
+        }
+      }
+    }
+  }
+}

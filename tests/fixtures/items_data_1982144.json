@@ -1,0 +1,58 @@
+{
+  "status": 200,
+  "message": "success",
+  "data": {
+    "1727921": {
+      "item": {
+        "item_oid": 1727921,
+        "specs": [
+          {
+            "spec_oid": "traffic",
+            "spec_title": "流量",
+            "spec_items": [
+              {
+                "spec_item_oid": "10gb",
+                "name": "總量10GB"
+              }
+            ]
+          },
+          {
+            "spec_oid": "spec-days",
+            "spec_title": "天數",
+            "spec_items": [
+              {
+                "spec_item_oid": "three-days",
+                "name": "3 日"
+              }
+            ]
+          }
+        ],
+        "skus": [
+          {
+            "sku_oid": "discounted-sku",
+            "spec": {
+              "traffic": "10gb",
+              "spec-days": "three-days"
+            },
+            "official_price": 21483,
+            "single_price": {
+              "fullday": 10741
+            }
+          }
+        ]
+      },
+      "calendar": {
+        "2026-07-22": {
+          "date": "2026-07-22",
+          "events": [
+            "fullday"
+          ],
+          "is_saleable": true,
+          "is_sold_out": false
+        }
+      },
+      "closeList": {},
+      "skusPriceCalendar": null
+    }
+  }
+}

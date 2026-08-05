@@ -1,0 +1,19 @@
+{
+  "productId": "149025",
+  "url": "https://www.kkday.com/zh-tw/product/149025-example",
+  "name": "日本 eSIM｜SoftBank 5G 高速無限流量",
+  "packages": [
+    {
+      "packageId": "476215",
+      "name": "【50% OFF】日本網卡｜SoftBank 每日/無限流量 eSIM",
+      "itemIds": ["221992"],
+      "description": ""
+    },
+    {
+      "packageId": "1982144",
+      "name": "【50% OFF】日本網卡｜SoftBank 總量 eSIM",
+      "itemIds": ["1727921"],
+      "description": ""
+    }
+  ]
+}

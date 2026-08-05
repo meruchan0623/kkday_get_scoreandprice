@@ -1,0 +1,56 @@
+from pathlib import Path
+
+import openpyxl
+import pytest
+
+from kkday_scraper.inputs import (
+    deduplicate_inputs,
+    load_manual_urls,
+    load_txt,
+    load_vendor_excel,
+    normalize_product_url,
+)
+
+
+URL_A = "https://www.kkday.com/zh-tw/product/149025-example"
+URL_B = "https://www.kkday.com/zh-tw/product/1982144-example"
+
+
+def test_normalize_product_url_rejects_non_product_url() -> None:
+    with pytest.raises(ValueError, match="KKday 商品 URL"):
+        normalize_product_url("https://www.kkday.com/zh-tw/portable-travel-wifi-sim-card")
+
+
+def test_normalize_product_url_drops_query_tokens_and_fragments() -> None:
+    raw = f"{URL_A}?previewToken=secret&utm_source=test#package"
+
+    assert normalize_product_url(raw) == URL_A
+
+
+def test_manual_and_txt_inputs_preserve_order(tmp_path: Path) -> None:
+    text_path = tmp_path / "urls.txt"
+    text_path.write_text(f"{URL_B}\n\n", encoding="utf-8")
+
+    items = load_manual_urls(f"{URL_A}\n{URL_A}") + load_txt(text_path, start_order=2)
+    unique = deduplicate_inputs(items)
+
+    assert [item.url for item in unique] == [URL_A, URL_B]
+    assert [item.input_order for item in unique] == [0, 2]
+
+
+def test_vendor_excel_reads_headers_and_source_coordinates(tmp_path: Path) -> None:
+    path = tmp_path / "vendors.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["TSIM 網址", "BC"])
+    sheet.append([URL_A, URL_B])
+    sheet.append(["", "not-a-url"])
+    workbook.save(path)
+
+    items, warnings = load_vendor_excel(path)
+
+    assert [(item.vendor, item.source_row, item.source_column) for item in items] == [
+        ("TSIM 網址", 2, 1),
+        ("BC", 2, 2),
+    ]
+    assert warnings == ["忽略非 KKday 商品 URL：工作表第 3 行，第 2 列：not-a-url"]

@@ -1,0 +1,79 @@
+{
+  "status": 200,
+  "message": "success",
+  "data": {
+    "221992": {
+      "item": {
+        "item_oid": 221992,
+        "specs": [
+          {
+            "spec_oid": "traffic",
+            "spec_title": "流量",
+            "spec_items": [
+              {
+                "spec_item_oid": "unlimited",
+                "name": "無限流量（保證不降速）"
+              },
+              {
+                "spec_item_oid": "500mb",
+                "name": "500MB/日"
+              }
+            ]
+          },
+          {
+            "spec_oid": "spec-days",
+            "spec_title": "天數",
+            "spec_items": [
+              {
+                "spec_item_oid": "one-day",
+                "name": "1 日"
+              }
+            ]
+          }
+        ],
+        "skus": [
+          {
+            "sku_oid": "available-sku",
+            "spec": {
+              "traffic": "500mb",
+              "spec-days": "one-day"
+            },
+            "official_price": null,
+            "single_price": {
+              "fullday": 711
+            }
+          },
+          {
+            "sku_oid": "closed-sku",
+            "spec": {
+              "traffic": "unlimited",
+              "spec-days": "one-day"
+            },
+            "official_price": 15942,
+            "single_price": {
+              "fullday": 7971
+            }
+          }
+        ]
+      },
+      "calendar": {
+        "2026-07-22": {
+          "date": "2026-07-22",
+          "events": [
+            "fullday"
+          ],
+          "is_saleable": true,
+          "is_sold_out": false
+        }
+      },
+      "closeList": {
+        "closed-sku": {
+          "2026-07-22": [
+            "fullday"
+          ]
+        }
+      },
+      "skusPriceCalendar": null
+    }
+  }
+}
