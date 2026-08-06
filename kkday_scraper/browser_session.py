@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import platform
 import re
 import socket
 from pathlib import Path
@@ -31,6 +29,10 @@ class SessionUnavailableError(RuntimeError):
     pass
 
 
+_LOOPBACK_CDP_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_BROWSER_WEBSOCKET_PATH_PREFIX = "/devtools/browser/"
+
+
 def _sanitize_browser_error(message: str) -> str:
     return re.sub(
         r"(wss?://(?:127\.0\.0\.1|localhost|\[::1\]):\d+/devtools/browser/)[^\s'\"<>]+",
@@ -39,22 +41,53 @@ def _sanitize_browser_error(message: str) -> str:
     )
 
 
-def ensure_cdp_endpoint_reachable(cdp_url: str, timeout: float = 1.0) -> None:
-    parsed = urlsplit(cdp_url)
-    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
-        return
+def _parse_loopback_cdp_url(
+    cdp_url: str, *, allowed_schemes: frozenset[str]
+):
     try:
+        parsed = urlsplit(cdp_url)
+        hostname = parsed.hostname
         port = parsed.port
-    except ValueError:
-        port = None
+    except ValueError as exc:
+        raise SessionUnavailableError("CDP 地址无效") from exc
+    if parsed.scheme not in allowed_schemes:
+        raise SessionUnavailableError("CDP 地址协议无效")
+    if parsed.username is not None or parsed.password is not None:
+        raise SessionUnavailableError("CDP 地址不得包含用户信息")
+    if hostname not in _LOOPBACK_CDP_HOSTS:
+        raise SessionUnavailableError("CDP 连接仅允许使用本机 loopback 地址")
     if port is None:
-        return
+        raise SessionUnavailableError("CDP 端口无效")
+    return parsed, hostname, port
+
+
+def _is_safe_browser_websocket_path(path: str) -> bool:
+    return (
+        path.startswith(_BROWSER_WEBSOCKET_PATH_PREFIX)
+        and len(path) > len(_BROWSER_WEBSOCKET_PATH_PREFIX)
+        and not any(ord(char) < 32 or ord(char) == 127 for char in path)
+        and "?" not in path
+        and "#" not in path
+    )
+
+
+def ensure_cdp_endpoint_reachable(cdp_url: str, timeout: float = 1.0) -> None:
+    parsed, hostname, port = _parse_loopback_cdp_url(
+        cdp_url, allowed_schemes=frozenset({"http", "ws"})
+    )
+    if parsed.scheme == "ws" and (
+        not _is_safe_browser_websocket_path(parsed.path)
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise SessionUnavailableError("CDP WebSocket 地址路径无效")
+    socket_host = "::1" if hostname == "::1" else "127.0.0.1"
     try:
-        with socket.create_connection((parsed.hostname, port), timeout=timeout):
+        with socket.create_connection((socket_host, port), timeout=timeout):
             return
     except OSError as exc:
         raise SessionUnavailableError(
-            f"{parsed.hostname}:{port} 未监听。请保持现有 Chrome/Edge 打开，在 "
+            f"{hostname}:{port} 未监听。请保持现有 Chrome/Edge 打开，在 "
             "chrome://inspect/#remote-debugging（Edge 可用 "
             "edge://inspect/#remote-debugging）勾选 Allow remote debugging，"
             "然后点击“连接现有浏览器”。程序不会启动备用浏览器。"
@@ -62,25 +95,16 @@ def ensure_cdp_endpoint_reachable(cdp_url: str, timeout: float = 1.0) -> None:
 
 
 def _active_port_files() -> list[Path]:
-    home = Path.home()
-    system = platform.system()
-    if system == "Darwin":
-        base = home / "Library" / "Application Support"
-        return [
-            base / "Google" / "Chrome" / "DevToolsActivePort",
-            base / "Google" / "Chrome Canary" / "DevToolsActivePort",
-            base / "Microsoft Edge" / "DevToolsActivePort",
-        ]
-    if system == "Windows":
-        base = Path(os.environ.get("LOCALAPPDATA", ""))
-        return [
-            base / "Google" / "Chrome" / "User Data" / "DevToolsActivePort",
-            base / "Microsoft" / "Edge" / "User Data" / "DevToolsActivePort",
-        ]
+    root = (
+        Path.home()
+        / "Library"
+        / "Application Support"
+        / "KKdayScraper"
+        / "browser-profiles"
+    )
     return [
-        home / ".config" / "google-chrome" / "DevToolsActivePort",
-        home / ".config" / "chromium" / "DevToolsActivePort",
-        home / ".config" / "microsoft-edge" / "DevToolsActivePort",
+        root / "edge" / "DevToolsActivePort",
+        root / "chrome" / "DevToolsActivePort",
     ]
 
 
@@ -89,28 +113,34 @@ def resolve_cdp_endpoint(
 ) -> str:
     """Resolve Chrome's browser WebSocket without exposing its transient id."""
 
-    parsed = urlsplit(cdp_url)
-    if parsed.scheme in {"ws", "wss"}:
-        return cdp_url
-    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
-        raise SessionUnavailableError(
-            "CDP 连接必须使用本机 DevToolsActivePort 提供的 WebSocket 地址"
-        )
     try:
-        requested_port = parsed.port
-    except ValueError:
-        requested_port = None
-    if requested_port is None:
-        raise SessionUnavailableError("CDP 端口无效，无法发现 WebSocket 地址")
+        parsed = urlsplit(cdp_url)
+    except ValueError as exc:
+        raise SessionUnavailableError("CDP 地址无效") from exc
+    if parsed.scheme in {"ws", "wss"}:
+        raise SessionUnavailableError(
+            "CDP 配置不得直接使用 WebSocket 地址；"
+            "请配置本机 HTTP 调试端口并通过 DevToolsActivePort 发现"
+        )
+    parsed, _hostname, requested_port = _parse_loopback_cdp_url(
+        cdp_url, allowed_schemes=frozenset({"http"})
+    )
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        raise SessionUnavailableError("CDP HTTP 配置只能指向本机调试端口")
 
-    for active_port_file in active_port_files or _active_port_files():
+    discovery_files = (
+        _active_port_files()
+        if active_port_files is None
+        else active_port_files
+    )
+    for active_port_file in discovery_files:
         try:
             lines = active_port_file.read_text(encoding="utf-8").splitlines()
             port = int(lines[0])
             path = lines[1]
         except (OSError, ValueError, IndexError):
             continue
-        if port == requested_port and path.startswith("/devtools/browser/"):
+        if port == requested_port and _is_safe_browser_websocket_path(path):
             return f"ws://127.0.0.1:{port}{path}"
     raise SessionUnavailableError(
         f"调试端口 {requested_port} 存在但无法发现 WebSocket 地址；"
@@ -123,14 +153,18 @@ def browser_connection_info_for_cdp(
 ) -> BrowserConnectionInfo | None:
     """Return safe browser identity without returning its WebSocket URL."""
 
-    parsed = urlsplit(cdp_url)
     try:
-        port = parsed.port
-    except ValueError:
+        _parsed, _hostname, port = _parse_loopback_cdp_url(
+            cdp_url, allowed_schemes=frozenset({"http"})
+        )
+    except SessionUnavailableError:
         return None
-    if port is None:
-        return None
-    for active_port_file in active_port_files or _active_port_files():
+    discovery_files = (
+        _active_port_files()
+        if active_port_files is None
+        else active_port_files
+    )
+    for active_port_file in discovery_files:
         try:
             active_port = int(
                 active_port_file.read_text(encoding="utf-8")
@@ -142,9 +176,12 @@ def browser_connection_info_for_cdp(
         if active_port != port:
             continue
         path_text = str(active_port_file).lower()
-        if "microsoft" in path_text and "edge" in path_text:
+        profile_name = active_port_file.parent.name.lower()
+        if profile_name == "edge" or (
+            "microsoft" in path_text and "edge" in path_text
+        ):
             browser = BrowserKind.EDGE
-        elif "google" in path_text or "chrome" in path_text:
+        elif profile_name == "chrome" or "google" in path_text or "chrome" in path_text:
             browser = BrowserKind.CHROME
         else:
             browser = BrowserKind.AUTO
@@ -232,7 +269,7 @@ class BrowserSession:
             self._context.add_cookies(cookies)
         except Exception:
             # Non-fatal: probe_member will still detect a mismatch and we can
-            # surface it. Bad cookies must never crash the browser attach path.
+            # surface it. Bad cookies must never crash the dedicated path.
             pass
 
     def connect(
@@ -249,9 +286,10 @@ class BrowserSession:
             )
         if endpoint is not None:
             cdp_endpoint = endpoint.ws_url
+            inject_preference_cookies = True
         else:
-            ensure_cdp_endpoint_reachable(self.config.cdp_url)
             cdp_endpoint = resolve_cdp_endpoint(self.config.cdp_url)
+            inject_preference_cookies = False
         ensure_cdp_endpoint_reachable(cdp_endpoint)
         self._playwright = sync_playwright().start()
         try:
@@ -261,7 +299,8 @@ class BrowserSession:
             if not self._browser.contexts:
                 raise SessionUnavailableError("CDP 浏览器没有可复用的默认上下文")
             self._context = self._browser.contexts[0]
-            self._inject_preference_cookies()
+            if inject_preference_cookies:
+                self._inject_preference_cookies()
             self._page = self._context.new_page()
             self._owns_context = False
         except Exception as attach_error:
