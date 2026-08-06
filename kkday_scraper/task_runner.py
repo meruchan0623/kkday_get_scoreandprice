@@ -121,9 +121,11 @@ class TaskRunner:
         blocked = False
         blocked_reason: str | None = None
         preflight_failed = False
+        probe_failed = False
         preflight_verified = False
         checkpoint_error: Exception | None = None
         output_path: Path | None = None
+        final_checkpoint_saved = False
         current_index = -1
         latest_readiness: ReadinessReport | None = None
         reporter(
@@ -181,57 +183,10 @@ class TaskRunner:
                     len(items),
                 )
             )
-            probe = self.session.probe_member(config.market)
-            publish_readiness(
-                replace(
-                    ReadinessReport.from_member_probe(probe),
-                    product_url=item.url,
-                )
-            )
-            if not probe.member_api_ready:
-                blocked = True
-                reporter(
-                    AppEvent(
-                        EventKind.FAILURE,
-                        probe.block_reason or "浏览器会话不可用",
-                        RunPhase.BLOCKED,
-                        index + 1,
-                        len(items),
-                    )
-                )
-                break
             try:
-                product = scraper.scrape(item, probe, config)
-            except (SessionBlockedError, SessionExpiredError) as exc:
-                blocked = True
-                blocked_reason = str(exc)
-                product = ProductResult(
-                    item,
-                    None,
-                    (),
-                    (
-                        FailureRecord(
-                            FailureKind.SESSION_EXPIRED
-                            if isinstance(exc, SessionExpiredError)
-                            else FailureKind.SESSION_BLOCKED,
-                            item.url,
-                            "product",
-                            str(exc),
-                            False,
-                            item.input_order,
-                        ),
-                    ),
-                )
-                reporter(
-                    AppEvent(
-                        EventKind.FAILURE,
-                        str(exc),
-                        RunPhase.BLOCKED,
-                        index + 1,
-                        len(items),
-                    )
-                )
+                probe = self.session.probe_member(config.market)
             except Exception as exc:
+                probe_failed = True
                 product = ProductResult(
                     item,
                     None,
@@ -240,13 +195,104 @@ class TaskRunner:
                         FailureRecord(
                             FailureKind.API,
                             item.url,
-                            "product",
+                            "member_probe",
                             str(exc),
                             True,
                             item.input_order,
                         ),
                     ),
                 )
+                reporter(
+                    AppEvent(
+                        EventKind.FAILURE,
+                        str(exc),
+                        RunPhase.FAILED,
+                        index + 1,
+                        len(items),
+                    )
+                )
+            else:
+                publish_readiness(
+                    replace(
+                        ReadinessReport.from_member_probe(probe),
+                        product_url=item.url,
+                    )
+                )
+                if not probe.member_api_ready:
+                    blocked = True
+                    blocked_reason = probe.block_reason
+                    product = ProductResult(
+                        item,
+                        None,
+                        (),
+                        (
+                            FailureRecord(
+                                FailureKind.SESSION_BLOCKED,
+                                item.url,
+                                "member_probe",
+                                probe.block_reason or "浏览器会话不可用",
+                                False,
+                                item.input_order,
+                            ),
+                        ),
+                    )
+                    reporter(
+                        AppEvent(
+                            EventKind.FAILURE,
+                            probe.block_reason or "浏览器会话不可用",
+                            RunPhase.BLOCKED,
+                            index + 1,
+                            len(items),
+                        )
+                    )
+                else:
+                    try:
+                        product = scraper.scrape(item, probe, config)
+                    except (SessionBlockedError, SessionExpiredError) as exc:
+                        blocked = True
+                        blocked_reason = str(exc)
+                        product = ProductResult(
+                            item,
+                            None,
+                            (),
+                            (
+                                FailureRecord(
+                                    FailureKind.SESSION_EXPIRED
+                                    if isinstance(exc, SessionExpiredError)
+                                    else FailureKind.SESSION_BLOCKED,
+                                    item.url,
+                                    "product",
+                                    str(exc),
+                                    False,
+                                    item.input_order,
+                                ),
+                            ),
+                        )
+                        reporter(
+                            AppEvent(
+                                EventKind.FAILURE,
+                                str(exc),
+                                RunPhase.BLOCKED,
+                                index + 1,
+                                len(items),
+                            )
+                        )
+                    except Exception as exc:
+                        product = ProductResult(
+                            item,
+                            None,
+                            (),
+                            (
+                                FailureRecord(
+                                    FailureKind.API,
+                                    item.url,
+                                    "product",
+                                    str(exc),
+                                    True,
+                                    item.input_order,
+                                ),
+                            ),
+                        )
 
             products.append(product)
             try:
@@ -275,7 +321,7 @@ class TaskRunner:
                     product,
                 )
             )
-            if blocked:
+            if blocked or probe_failed:
                 break
             if index == 0 and not preflight_verified and not control.stopped:
                 preflight_failed = True
@@ -302,6 +348,7 @@ class TaskRunner:
                 final_output = checkpoint(tuple(products), True)
                 if isinstance(final_output, Path):
                     output_path = final_output
+                    final_checkpoint_saved = True
             except Exception as exc:
                 checkpoint_error = exc
                 reporter(
@@ -323,9 +370,9 @@ class TaskRunner:
         elif blocked:
             phase = RunPhase.BLOCKED
             message = blocked_reason or "任务因浏览器会话不可用而停止"
-        elif preflight_failed:
+        elif preflight_failed or probe_failed:
             phase = RunPhase.FAILED
-            message = "首个商品验证失败"
+            message = "首个商品验证失败" if preflight_failed else "会员状态检查失败"
         else:
             phase = RunPhase.COMPLETED
             message = "任务完成"
@@ -335,6 +382,10 @@ class TaskRunner:
             started_at=started,
             finished_at=datetime.now(),
             stopped=control.stopped,
+            terminal_phase=phase,
+            requested_count=len(items),
+            processed_count=len(products),
+            final_checkpoint_saved=final_checkpoint_saved,
         )
         reporter(
             AppEvent(

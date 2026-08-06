@@ -97,12 +97,17 @@ def test_runner_checkpoints_after_each_product(tmp_path: Path) -> None:
         RunConfig(date(2026, 7, 22), tmp_path),
         RunControl(),
         events.append,
-        lambda products, _final: checkpoints.append(len(products)) or None,
+        lambda products, final: checkpoints.append(len(products))
+        or (tmp_path / "result.xlsx" if final else None),
     )
 
     assert scraper.calls == [items[0].url, items[1].url]
     assert checkpoints == [1, 2, 2]
     assert result.stopped is False
+    assert result.terminal_phase is RunPhase.COMPLETED
+    assert result.requested_count == 2
+    assert result.processed_count == 2
+    assert result.final_checkpoint_saved is True
     assert events[-1].kind is EventKind.FINISHED
     assert events[-1].phase is RunPhase.COMPLETED
 
@@ -141,6 +146,76 @@ def test_runner_stops_batch_on_session_block_and_keeps_partial_result(
     assert len(result.products) == 2
     assert result.products[-1].failures[0].kind is FailureKind.SESSION_BLOCKED
     assert events[-1].phase is RunPhase.BLOCKED
+
+
+def test_runner_records_unavailable_member_probe_as_current_product_failure(
+    tmp_path: Path,
+) -> None:
+    first = InputItem("https://www.kkday.com/zh-tw/product/1-a", input_order=0)
+    second = InputItem("https://www.kkday.com/zh-tw/product/2-b", input_order=1)
+    checkpoints: list[tuple[int, bool]] = []
+    events = []
+    runner = TaskRunner(
+        FakeSession(blocked_on_probe=2),
+        lambda _page, _config, _continue: FakeScraper(),
+        sleep=lambda _seconds: None,
+    )
+
+    result = runner.run(
+        [first, second],
+        RunConfig(date(2026, 7, 22), tmp_path),
+        RunControl(),
+        events.append,
+        lambda products, final: checkpoints.append((len(products), final))
+        or (tmp_path / "result.xlsx" if final else None),
+    )
+
+    assert result.terminal_phase is RunPhase.BLOCKED
+    assert result.requested_count == 2
+    assert result.processed_count == 2
+    assert result.final_checkpoint_saved is True
+    assert [failure.url for failure in result.failures] == [second.url]
+    assert result.failures[0].kind is FailureKind.SESSION_BLOCKED
+    assert checkpoints == [(1, False), (2, False), (2, True)]
+    assert events[-1].kind is EventKind.FINISHED
+    assert events[-1].phase is RunPhase.BLOCKED
+
+
+def test_runner_finalizes_failed_probe_exception_with_failure_record(
+    tmp_path: Path,
+) -> None:
+    item = InputItem("https://www.kkday.com/zh-tw/product/1-a")
+    checkpoints: list[tuple[int, bool]] = []
+    events = []
+
+    class ProbeFailureSession(FakeSession):
+        def probe_member(self, market: str) -> SessionProbe:
+            raise RuntimeError("probe transport failed")
+
+    runner = TaskRunner(
+        ProbeFailureSession(),
+        lambda _page, _config, _continue: FakeScraper(),
+        sleep=lambda _seconds: None,
+    )
+
+    result = runner.run(
+        [item],
+        RunConfig(date(2026, 7, 22), tmp_path),
+        RunControl(),
+        events.append,
+        lambda products, final: checkpoints.append((len(products), final))
+        or (tmp_path / "result.xlsx" if final else None),
+    )
+
+    assert result.terminal_phase is RunPhase.FAILED
+    assert result.requested_count == 1
+    assert result.processed_count == 1
+    assert result.final_checkpoint_saved is True
+    assert result.failures[0].url == item.url
+    assert result.failures[0].stage == "member_probe"
+    assert checkpoints == [(1, False), (1, True)]
+    assert events[-1].kind is EventKind.FINISHED
+    assert events[-1].phase is RunPhase.FAILED
 
 
 def test_first_product_navigation_failure_does_not_use_member_probe_as_recovery(
@@ -313,6 +388,8 @@ def test_checkpoint_failure_emits_failed_terminal_event(tmp_path: Path) -> None:
     )
 
     assert result.output_path is None
+    assert result.terminal_phase is RunPhase.FAILED
+    assert result.final_checkpoint_saved is False
     assert events[-2].kind is EventKind.FAILURE
     assert events[-1].kind is EventKind.FINISHED
     assert events[-1].phase is RunPhase.FAILED

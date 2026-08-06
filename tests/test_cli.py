@@ -5,7 +5,7 @@ import pytest
 
 from kkday_scraper import cli
 from kkday_scraper.cli import build_parser, load_inputs
-from kkday_scraper.models import RunResult, SessionProbe
+from kkday_scraper.models import InputItem, ProductResult, RunPhase, RunResult, SessionProbe
 
 
 def test_cli_accepts_a_complete_codex_driven_run(tmp_path: Path) -> None:
@@ -144,3 +144,69 @@ def test_cli_continues_to_public_product_preflight_without_login(
     assert calls == ["https://www.kkday.com/zh-tw/product/149025-example"]
     assert code == 4
     assert "公开商品接口" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("phase", "final_checkpoint_saved"),
+    [
+        (RunPhase.BLOCKED, True),
+        (RunPhase.FAILED, False),
+        (RunPhase.COMPLETED, False),
+    ],
+)
+def test_cli_rejects_non_successful_terminal_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    phase: RunPhase,
+    final_checkpoint_saved: bool,
+) -> None:
+    class FakeSession:
+        def __init__(self, _config):
+            pass
+
+        def connect(self, allow_launch=False, endpoint=None):
+            pass
+
+        def probe_member(self, market):
+            return SessionProbe(
+                True,
+                True,
+                True,
+                "TWD",
+                market,
+                "https://www.kkday.com/zh-tw",
+            )
+
+        def close(self):
+            pass
+
+    class FakeRunner:
+        def __init__(self, _session):
+            pass
+
+        def run(self, items, _config, _control, _reporter, _checkpoint):
+            now = datetime.now()
+            return RunResult(
+                (ProductResult(items[0], None, ()),),
+                tmp_path / "result.xlsx" if final_checkpoint_saved else None,
+                now,
+                now,
+                terminal_phase=phase,
+                requested_count=len(items),
+                processed_count=len(items),
+                final_checkpoint_saved=final_checkpoint_saved,
+            )
+
+    monkeypatch.setattr(cli, "BrowserSession", FakeSession)
+    monkeypatch.setattr(cli, "TaskRunner", FakeRunner)
+
+    code = cli.main(
+        [
+            "--url",
+            "https://www.kkday.com/zh-tw/product/149025-example",
+            "--output",
+            str(tmp_path),
+        ]
+    )
+
+    assert code == 4

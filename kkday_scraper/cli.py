@@ -11,7 +11,15 @@ from .browser_bootstrap import BrowserBootstrapper
 from .browser_session import BrowserSession
 from .exporter import RunExporter
 from .inputs import deduplicate_inputs, load_manual_urls, load_txt, load_vendor_excel
-from .models import AppEvent, BrowserKind, EventKind, RunConfig, SUPPORTED_MARKETS, market_homepage
+from .models import (
+    AppEvent,
+    BrowserKind,
+    EventKind,
+    RunConfig,
+    RunPhase,
+    SUPPORTED_MARKETS,
+    market_homepage,
+)
 from .task_runner import RunControl, TaskRunner
 
 
@@ -153,8 +161,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             trusted_rows=trusted,
             failures=failures,
             output=str(result.output_path) if result.output_path else None,
+            terminal_phase=result.terminal_phase.value,
+            requested=result.requested_count,
+            processed=result.processed_count,
+            final_checkpoint_saved=result.final_checkpoint_saved,
         )
-        return 0 if result.products and failures == 0 else 4
+        successful = (
+            result.terminal_phase is RunPhase.COMPLETED
+            and result.requested_count > 0
+            and result.processed_count == result.requested_count
+            and result.final_checkpoint_saved
+            and failures == 0
+        )
+        return 0 if successful else 4
     except (OSError, ValueError) as exc:
         _emit("error", str(exc))
         return 2

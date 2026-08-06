@@ -260,6 +260,10 @@ class RunResult:
     started_at: datetime
     finished_at: datetime
     stopped: bool = False
+    terminal_phase: RunPhase = RunPhase.COMPLETED
+    requested_count: int = 0
+    processed_count: int = 0
+    final_checkpoint_saved: bool = False
 
     @property
     def rows(self) -> tuple[SkuRow, ...]:
