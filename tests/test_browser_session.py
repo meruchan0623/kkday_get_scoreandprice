@@ -107,6 +107,78 @@ def test_connect_opens_the_configured_market_homepage(monkeypatch, tmp_path) -> 
     assert page.goto_calls == ["https://www.kkday.com/zh-hk"]
 
 
+def test_probe_member_switches_reused_page_to_requested_market_before_probe(
+    monkeypatch, tmp_path
+) -> None:
+    class ReusedMarketPage(BlankPage):
+        def __init__(self) -> None:
+            super().__init__()
+            self.url = "https://www.kkday.com/zh-tw/product/149025"
+            self.operations = []
+
+        def goto(self, url: str, **_kwargs) -> None:
+            self.operations.append("goto")
+            super().goto(url, **_kwargs)
+
+        def evaluate(self, script: str, args: dict) -> dict:
+            self.operations.append("evaluate")
+            return {
+                "status": 200,
+                "contentType": "application/json",
+                "contractOk": True,
+                "isLogin": False,
+                "currency": "HKD",
+            }
+
+    page = ReusedMarketPage()
+
+    class Context:
+        def new_page(self):
+            return page
+
+    class Browser:
+        contexts = [Context()]
+
+    class Playwright:
+        chromium = type(
+            "Chromium",
+            (),
+            {"connect_over_cdp": staticmethod(lambda _url: Browser())},
+        )()
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(
+        browser_session_module,
+        "ensure_cdp_endpoint_reachable",
+        lambda _url: None,
+    )
+    monkeypatch.setattr(
+        browser_session_module,
+        "resolve_cdp_endpoint",
+        lambda _url: "ws://localhost/devtools/browser/test",
+    )
+    monkeypatch.setattr(
+        browser_session_module,
+        "sync_playwright",
+        lambda: type("Manager", (), {"start": lambda self: Playwright()})(),
+    )
+
+    session = BrowserSession(
+        RunConfig(date(2026, 7, 22), tmp_path, market="zh-hk")
+    )
+    session.connect()
+    page.goto_calls.clear()
+    page.operations.clear()
+    page.url = "https://www.kkday.com/zh-tw/product/149025"
+    probe = session.probe_member("zh-hk")
+
+    assert page.goto_calls == ["https://www.kkday.com/zh-hk"]
+    assert page.operations == ["goto", "evaluate"]
+    assert probe.currency == "HKD"
+
+
 def test_html_403_probe_is_blocked() -> None:
     probe = classify_probe(
         {
