@@ -6,6 +6,12 @@ import tempfile
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from uuid import uuid4
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised via a simulated fallback
+    fcntl = None
 
 import openpyxl
 from openpyxl.styles import Font
@@ -61,12 +67,65 @@ class RunExporter:
         result_dir: Path | None = None,
     ) -> None:
         self.config = config
-        self.run_id = run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.run_dir = result_dir or config.output_dir / self.run_id
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.run_id = run_id or (
+            datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            + f"_{uuid4().hex[:8]}"
+        )
+        self.batch_id = self.run_id
+        self._lock_fd: int | None = None
+        self._lock_path: Path | None = None
+        self._uses_marker_lock = False
+        if result_dir is None:
+            self.run_dir = config.output_dir / self.run_id
+            try:
+                self.run_dir.mkdir(parents=True, exist_ok=False)
+            except FileExistsError as exc:
+                raise FileExistsError(f"结果目录已存在，拒绝覆盖：{self.run_dir}") from exc
+        else:
+            self.run_dir = result_dir
+            self.run_dir.mkdir(parents=True, exist_ok=True)
+            self._claim_result_dir()
         self.output_path = self.run_dir / "kkday_price_results.xlsx"
         self.summary_path = self.run_dir / "run_summary.json"
         self.failures_path = self.run_dir / "failures.jsonl"
+
+    def _claim_result_dir(self) -> None:
+        lock_path = self.run_dir / ".kkday-export.lock"
+        flags = os.O_CREAT | os.O_RDWR
+        if fcntl is None:
+            flags |= os.O_EXCL
+        try:
+            lock_fd = os.open(lock_path, flags, 0o600)
+            if fcntl is not None:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, FileExistsError) as exc:
+            if "lock_fd" in locals():
+                os.close(lock_fd)
+            raise RuntimeError(
+                f"结果目录正在被另一个导出任务占用：{self.run_dir}"
+            ) from exc
+        self._lock_fd = lock_fd
+        self._lock_path = lock_path
+        self._uses_marker_lock = fcntl is None
+        os.ftruncate(lock_fd, 0)
+        os.write(lock_fd, f"batch_id={self.batch_id}\npid={os.getpid()}\n".encode())
+
+    def close(self) -> None:
+        if self._lock_fd is None:
+            return
+        try:
+            if fcntl is not None and not self._uses_marker_lock:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(self._lock_fd)
+            self._lock_fd = None
+            if self._uses_marker_lock and self._lock_path is not None:
+                self._lock_path.unlink(missing_ok=True)
+            self._lock_path = None
+            self._uses_marker_lock = False
+
+    def __del__(self) -> None:
+        self.close()
 
     def _row_values(
         self,
@@ -172,6 +231,7 @@ class RunExporter:
 
         summary_sheet = workbook.create_sheet("运行摘要")
         summary_sheet.append(["字段", "值"])
+        summary_sheet.append(["批次ID", self.batch_id])
         summary_sheet.append(["运行ID", self.run_id])
         summary_sheet.append(["使用日期", self.config.usage_date.isoformat()])
         summary_sheet.append(["商品完成数", len(products)])
@@ -209,6 +269,7 @@ class RunExporter:
             temp_workbook.unlink(missing_ok=True)
 
         summary = {
+            "batch_id": self.batch_id,
             "run_id": self.run_id,
             "usage_date": self.config.usage_date.isoformat(),
             "status": "final" if final else "partial",

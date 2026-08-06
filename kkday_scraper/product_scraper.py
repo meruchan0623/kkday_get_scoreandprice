@@ -15,6 +15,7 @@ from .browser_api import (
     SessionBlockedError,
     SessionExpiredError,
 )
+from .inputs import extract_product_id_from_url
 from .models import (
     FailureKind,
     FailureRecord,
@@ -115,8 +116,13 @@ def extract_product_snapshot(page: PageLike, url: str) -> ProductSnapshot:
     raw = page.evaluate(SNAPSHOT_SCRIPT)
     if not raw or not raw.get("packages"):
         raise SchemaDriftError("Nuxt option-section 缺少商品或套餐结构")
-    match = re.search(r"/product/(\d+)", url)
-    product_id = str(raw.get("productId") or (match.group(1) if match else ""))
+    url_product_id = extract_product_id_from_url(url)
+    page_product_id = str(raw.get("productId") or "")
+    if page_product_id and re.fullmatch(r"\d+", page_product_id) is None:
+        raise SchemaDriftError("Nuxt option-section 商品 ID 必须为数字")
+    if page_product_id and url_product_id and page_product_id != url_product_id:
+        raise SchemaDriftError("Nuxt option-section 商品 ID 与输入 URL 不一致")
+    product_id = page_product_id or url_product_id
     if not product_id:
         raise SchemaDriftError("Nuxt option-section 与 URL 都缺少商品 ID")
     packages = tuple(
@@ -282,12 +288,12 @@ class ProductScraper:
                 diagnostic.get("challenge")
             )
             if challenged:
-                match = re.search(r"/product/(\d+)", input_item.url)
+                product_id = extract_product_id_from_url(input_item.url)
                 calendar_ready = False
-                if match:
+                if product_id:
                     try:
                         self.api.fetch_package_calendar(
-                            match.group(1),
+                            product_id,
                             config.usage_date,
                             config.usage_date + timedelta(days=40),
                         )

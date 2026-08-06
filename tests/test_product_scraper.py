@@ -17,6 +17,7 @@ from kkday_scraper.product_scraper import (
     ProductScraper,
     extract_product_snapshot,
 )
+from kkday_scraper.sku_parser import SchemaDriftError
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -108,6 +109,22 @@ def test_snapshot_falls_back_to_numeric_product_id_from_url() -> None:
     snapshot = extract_product_snapshot(page, page.url)
 
     assert snapshot.product_id == "149025"
+
+
+def test_snapshot_rejects_a_non_numeric_product_id_from_the_page() -> None:
+    raw = load_fixture("product_snapshot_149025.json")
+    raw["productId"] = "not-a-number"
+
+    with pytest.raises(SchemaDriftError, match="商品 ID"):
+        extract_product_snapshot(FakePage(raw), raw["url"])
+
+
+def test_snapshot_requires_the_page_product_id_to_match_the_input_url() -> None:
+    raw = load_fixture("product_snapshot_149025.json")
+    raw["productId"] = "149026"
+
+    with pytest.raises(SchemaDriftError, match="不一致"):
+        extract_product_snapshot(FakePage(raw), raw["url"])
 
 
 def test_scrape_calls_each_package_once_and_returns_available_prices(

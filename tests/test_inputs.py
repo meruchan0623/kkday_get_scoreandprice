@@ -1,4 +1,5 @@
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import openpyxl
 import pytest
@@ -14,11 +15,29 @@ from kkday_scraper.inputs import (
 
 URL_A = "https://www.kkday.com/zh-tw/product/149025-example"
 URL_B = "https://www.kkday.com/zh-tw/product/1982144-example"
+MAX_INPUT_FILE_BYTES = 5 * 1024 * 1024
+MAX_INPUT_ROWS = 10_000
+MAX_INPUT_COLUMNS = 100
+MAX_INPUT_CELL_CHARS = 4_096
+MAX_INPUT_URL_CHARS = 2_048
+MAX_XLSX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 
 
 def test_normalize_product_url_rejects_non_product_url() -> None:
     with pytest.raises(ValueError, match="KKday 商品 URL"):
         normalize_product_url("https://www.kkday.com/zh-tw/portable-travel-wifi-sim-card")
+
+
+def test_normalize_product_url_requires_a_numeric_product_id() -> None:
+    with pytest.raises(ValueError, match="KKday 商品 URL"):
+        normalize_product_url("https://www.kkday.com/zh-tw/product/not-a-number-example")
+
+
+def test_normalize_product_url_limits_url_length() -> None:
+    raw = URL_A + "x" * (MAX_INPUT_URL_CHARS - len(URL_A) + 1)
+
+    with pytest.raises(ValueError, match="URL 长度超过限制"):
+        normalize_product_url(raw)
 
 
 def test_normalize_product_url_drops_query_tokens_and_fragments() -> None:
@@ -38,6 +57,29 @@ def test_manual_and_txt_inputs_preserve_order(tmp_path: Path) -> None:
     assert [item.input_order for item in unique] == [0, 2]
 
 
+def test_manual_urls_enforce_the_same_row_limit_as_files() -> None:
+    raw = (URL_A + "\n") * (MAX_INPUT_ROWS + 1)
+
+    with pytest.raises(ValueError, match="输入行数超过限制"):
+        load_manual_urls(raw)
+
+
+def test_load_txt_rejects_oversized_file_before_reading(tmp_path: Path) -> None:
+    path = tmp_path / "oversized.txt"
+    path.write_bytes(b"x" * (MAX_INPUT_FILE_BYTES + 1))
+
+    with pytest.raises(ValueError, match="输入文件超过大小限制"):
+        load_txt(path)
+
+
+def test_load_txt_enforces_the_row_limit_while_streaming(tmp_path: Path) -> None:
+    path = tmp_path / "many-urls.txt"
+    path.write_text((URL_A + "\n") * (MAX_INPUT_ROWS + 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="输入行数超过限制"):
+        load_txt(path)
+
+
 def test_vendor_excel_reads_headers_and_source_coordinates(tmp_path: Path) -> None:
     path = tmp_path / "vendors.xlsx"
     workbook = openpyxl.Workbook()
@@ -54,3 +96,36 @@ def test_vendor_excel_reads_headers_and_source_coordinates(tmp_path: Path) -> No
         ("BC", 2, 2),
     ]
     assert warnings == ["忽略非 KKday 商品 URL：工作表第 3 行，第 2 列：not-a-url"]
+
+
+def test_vendor_excel_enforces_column_and_cell_limits(tmp_path: Path) -> None:
+    too_many_columns = tmp_path / "too-many-columns.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append([f"供应商 {index}" for index in range(MAX_INPUT_COLUMNS + 1)])
+    workbook.save(too_many_columns)
+
+    with pytest.raises(ValueError, match="输入列数超过限制"):
+        load_vendor_excel(too_many_columns)
+
+    oversized_cell = tmp_path / "oversized-cell.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["TSIM 網址"])
+    sheet.append(["x" * (MAX_INPUT_CELL_CHARS + 1)])
+    workbook.save(oversized_cell)
+
+    with pytest.raises(ValueError, match="单元格内容超过限制"):
+        load_vendor_excel(oversized_cell)
+
+
+def test_vendor_excel_rejects_an_archive_expansion_bomb(tmp_path: Path) -> None:
+    path = tmp_path / "expansion-bomb.xlsx"
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "xl/worksheets/sheet1.xml",
+            b"x" * (MAX_XLSX_UNCOMPRESSED_BYTES + 1),
+        )
+
+    with pytest.raises(ValueError, match="解压后大小超过限制"):
+        load_vendor_excel(path)

@@ -6,6 +6,7 @@ from pathlib import Path
 import openpyxl
 import pytest
 
+import kkday_scraper.exporter as exporter_module
 from kkday_scraper.exporter import RunExporter
 from kkday_scraper.models import (
     FailureKind,
@@ -113,6 +114,74 @@ def test_exact_result_directory_does_not_add_a_timestamp_folder(
 
     assert output == result_dir / "kkday_price_results.xlsx"
     assert exporter.summary_path == result_dir / "run_summary.json"
+
+
+def test_default_result_directories_are_unique_within_the_same_second(
+    tmp_path: Path,
+) -> None:
+    config = RunConfig(date(2026, 7, 22), tmp_path)
+
+    first = RunExporter(config)
+    second = RunExporter(config)
+
+    assert first.run_dir != second.run_dir
+    assert first.batch_id != second.batch_id
+
+
+def test_default_result_directory_rejects_an_existing_run_id(tmp_path: Path) -> None:
+    config = RunConfig(date(2026, 7, 22), tmp_path)
+    RunExporter(config, run_id="20260722_120010")
+
+    with pytest.raises(FileExistsError, match="结果目录已存在"):
+        RunExporter(config, run_id="20260722_120010")
+
+
+def test_explicit_result_directory_has_one_writer_and_recovers_after_close(
+    tmp_path: Path,
+) -> None:
+    result_dir = tmp_path / "chosen-result"
+    first = RunExporter(RunConfig(date(2026, 7, 22), tmp_path), result_dir=result_dir)
+
+    first.checkpoint((make_product(),), final=False)
+    first.checkpoint((make_product(),), final=True)
+    with pytest.raises(RuntimeError, match="正在被另一个导出任务占用"):
+        RunExporter(RunConfig(date(2026, 7, 22), tmp_path), result_dir=result_dir)
+
+    first.close()
+    recovered = RunExporter(RunConfig(date(2026, 7, 22), tmp_path), result_dir=result_dir)
+    try:
+        assert recovered.checkpoint((make_product(),), final=True).exists()
+    finally:
+        recovered.close()
+
+
+def test_explicit_result_directory_lock_has_a_non_posix_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(exporter_module, "fcntl", None)
+    result_dir = tmp_path / "portable-result"
+    first = RunExporter(RunConfig(date(2026, 7, 22), tmp_path), result_dir=result_dir)
+
+    with pytest.raises(RuntimeError, match="正在被另一个导出任务占用"):
+        RunExporter(RunConfig(date(2026, 7, 22), tmp_path), result_dir=result_dir)
+
+    first.close()
+    recovered = RunExporter(RunConfig(date(2026, 7, 22), tmp_path), result_dir=result_dir)
+    recovered.close()
+
+
+def test_checkpoint_writes_one_batch_id_to_json_and_workbook(tmp_path: Path) -> None:
+    exporter = RunExporter(
+        RunConfig(date(2026, 7, 22), tmp_path), run_id="20260722_120011"
+    )
+
+    output = exporter.checkpoint((make_product(),), final=True)
+
+    summary = __import__("json").loads(exporter.summary_path.read_text(encoding="utf-8"))
+    sheet = openpyxl.load_workbook(output, data_only=True)["运行摘要"]
+    workbook_summary = {row[0].value: row[1].value for row in sheet.iter_rows(min_row=2)}
+    assert summary["batch_id"] == exporter.batch_id
+    assert workbook_summary["批次ID"] == exporter.batch_id
 
 
 def test_checkpoint_omits_unavailable_rows_by_default(tmp_path: Path) -> None:
