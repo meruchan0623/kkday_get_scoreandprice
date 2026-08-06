@@ -82,40 +82,27 @@ description: Use when Hermes or Hemis is asked to query, run, retry, diagnose, o
 <解释器> -c "from kkday_scraper.cookie_store import currency_from_store; print(currency_from_store())"
 ```
 
-输出必须等于本次 `--currency`（如 `TWD`）。输出 `None` 或其他币种时，按下面步骤重新截获写入。
+输出必须等于本次 `--currency`（如 `TWD`）。输出 `None` 或其他币种时，按下面步骤从已明确参数重新生成。
 
-### 截获并写入（缺失或币种错误时）
+### 生成并写入（缺失或币种错误时）
 
-用 ego-browser 从一个已正常加载 KKday 页面的浏览器读取偏好 Cookie：
-
-```bash
-ego-browser nodejs <<'EOF'
-const task = await useOrCreateTaskSpace('capture kkday currency cookie')
-await openOrReuseTab('https://www.kkday.com/zh-tw', { wait: true, timeout: 30 })
-await wait(3)
-const { cookies } = await cdp('Network.getAllCookies', {})
-const keep = cookies.filter(c =>
-  ['currency','country_lang','lang_ui'].includes(c.name) &&
-  c.domain.replace(/^\./,'').endsWith('kkday.com'))
-cliLog(JSON.stringify(keep, null, 2))
-EOF
-```
-
-把输出三项的 `name/value/domain/path/httpOnly/secure/sameSite/expires` 写入存储（`domain` 保持截获到的原值，不要加前导点）。可用一行完成：
+禁止调用 CDP 或浏览器的全量 Cookie API，也禁止读取登录 Cookie 后再过滤。只从本次明确的 `--market` 和 `--currency` 构造三个白名单偏好项：
 
 ```bash
 <解释器> - <<'PY'
 from kkday_scraper.cookie_store import save_preference_cookies
+market = "zh-tw"
+currency = "TWD"
 save_preference_cookies([
-  {"name":"currency","value":"TWD","domain":"www.kkday.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"},
-  {"name":"country_lang","value":"zh-tw","domain":"www.kkday.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"},
-  {"name":"lang_ui","value":"zh-tw","domain":"www.kkday.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"},
+  {"name":"currency","value":currency,"domain":"www.kkday.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"},
+  {"name":"country_lang","value":market,"domain":"www.kkday.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"},
+  {"name":"lang_ui","value":market,"domain":"www.kkday.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"},
 ])
 print("saved")
 PY
 ```
 
-写入后再次运行上面的校验命令确认币种。目标为其他币种（如 `HKD`/`USD`）时，把 `currency` 的 `value` 改为对应三字母代码；若浏览器尚无该币种 Cookie，需先在专用浏览器 UI 中切换一次再截获。
+写入后再次运行上面的校验命令确认币种。目标为其他币种（如 `HKD`/`USD`）时替换 `currency`；市场为香港时替换 `market` 为 `zh-hk`。若服务端仍不接受偏好值，只能在项目专用浏览器 UI 中人工切换，并继续以会员状态接口回读为真值；不得读取 Cookie 集合。
 
 ## 参数构造与命令
 
@@ -153,8 +140,8 @@ Hermes 必须从其配置的 `skills.external_dirs` 读取本项目的 `hermes-a
 - 如果输出为 `auth_required`、`401`、`403`、挑战 HTML 或需要人工验证，停止并请用户在可见的项目专用浏览器中完成登录／验证；用户确认后只重新运行一次。
 - 如果输出为 `currency_mismatch`，立即停止，按以下顺序处理，不得换算、重标或交付这些价格：
   1. 读取 `~/Documents/KKdayScraper/preference_cookies.json`，确认 `currency` 值等于本次 `--currency`。
-  2. 文件缺失或币种错误时，按上一节用 ego-browser 重新截获并写入，再重跑一次。
-  3. 文件正确但仍 mismatch，说明服务端依据 IP/账户偏好覆盖了 Cookie，请用户在可见专用浏览器 UI（`button.header__currency` → `.currency` 选项）切换到目标币种，确认后重新截获写回 Cookie 文件，再重跑一次。
+  2. 文件缺失或币种错误时，按上一节从明确参数重新生成，再重跑一次。
+  3. 文件正确但仍 mismatch，说明服务端依据 IP/账户偏好覆盖了 Cookie，请用户在可见专用浏览器 UI（`button.header__currency` → `.currency` 选项）切换到目标币种，确认后只按明确参数重写 Cookie 文件，再重跑一次；不得读取浏览器 Cookie 集合。
 - 重新运行仍失败时，保留原生诊断产物并报告最终错误，不再提示登录或自动重试。
 
 ## 成功验收与交付

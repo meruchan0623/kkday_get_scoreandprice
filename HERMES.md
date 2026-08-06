@@ -33,24 +33,25 @@ Hermes 必须按以下顺序执行，不能跳过运行前检查或产物验收�
 - 由 `kkday_scraper/cookie_store.py` 管理，白名单只允许三个非凭据站点偏好：`currency`、`country_lang`、`lang_ui`。session、CSRF、`KKWEB`、`datadome` 等凭据一律不写入，尝试写入会被拒绝。
 - `BrowserSession.connect()` 通过 CDP 连接专用浏览器后、新建页面前，自动调用 `context.add_cookies()` 注入这些偏好 Cookie；随后导航到分站首页并由 `probe_member` 回读币种。
 - Cookie 保留原始 host-only domain（如 `www.kkday.com`，不加前导点），才能覆盖浏览器 Profile 中已有的同名 host-only 币种 Cookie。
-- 当 `currency_mismatch` 出现时，先确认该文件存在且 `currency` 值等于目标币种；若缺失或错误，重新截获并写入后重跑。
+- 当 `currency_mismatch` 出现时，先确认该文件存在且 `currency` 值等于目标币种；若缺失或错误，按明确的市场和币种参数重新生成后重跑。
 
-用 ego-browser 截获当前浏览器币种 Cookie 并写入存储（只持久化白名单内的偏好项）：
+直接从本次明确的市场和币种参数生成白名单偏好项。禁止调用浏览器全量 Cookie API，禁止先读取登录 Cookie 再过滤：
 
 ```bash
-ego-browser nodejs <<'EOF'
-const task = await useOrCreateTaskSpace('capture kkday currency cookie')
-await openOrReuseTab('https://www.kkday.com/zh-tw', { wait: true, timeout: 30 })
-await wait(3)
-const { cookies } = await cdp('Network.getAllCookies', {})
-const keep = cookies.filter(c =>
-  ['currency','country_lang','lang_ui'].includes(c.name) &&
-  c.domain.replace(/^\./,'').endsWith('kkday.com'))
-cliLog(JSON.stringify(keep, null, 2))
-EOF
+python3 - <<'PY'
+from kkday_scraper.cookie_store import save_preference_cookies
+
+market = "zh-tw"
+currency = "TWD"
+save_preference_cookies([
+    {"name": "currency", "value": currency, "domain": "www.kkday.com", "path": "/", "secure": True, "httpOnly": True, "sameSite": "Lax"},
+    {"name": "country_lang", "value": market, "domain": "www.kkday.com", "path": "/", "secure": True, "httpOnly": True, "sameSite": "Lax"},
+    {"name": "lang_ui", "value": market, "domain": "www.kkday.com", "path": "/", "secure": True, "httpOnly": True, "sameSite": "Lax"},
+])
+PY
 ```
 
-把输出中三项的 `name/value/domain/path/httpOnly/secure/sameSite/expires` 通过 `kkday_scraper.cookie_store.save_preference_cookies()` 写入存储文件即可（domain 不要加前导点）。验证：写入后 `load_preference_cookies()` 能读到三项，且用 CDP 注入后 `get-member-status` 返回的 `currency` 等于目标币种。
+将示例参数替换为本次 `--market` 与 `--currency`；domain 固定为 host-only `www.kkday.com`。验证：写入后 `load_preference_cookies()` 能读到三项，且专用浏览器注入后 `get-member-status` 返回的 `currency` 等于目标币种。
 
 ### 兜底：UI 切换（仅当 Cookie 注入未生效）
 
@@ -61,7 +62,7 @@ EOF
 3. **进入目标分站**：在可见专用窗口访问本次 `--market` 对应首页，等待页面加载完成。
 4. **定位并打开币种控件**：优先用可访问性文本定位当前币种、货币、地区或语言/币种菜单；语义控件不足时用最新截图做一次可见点击。每次点击、滚动或输入后都必须重新读取状态。控件选择器参考：`button.header__currency` 打开币种弹层，弹层中的 `.currency` 选项以 `TWD 新臺幣` 等文案标识目标币种。
 5. **选择目标币种**：仅选择用户已经明确授权的三字母币种。不要填写账户、密码、验证码、OTP、卡号或其他敏感信息。
-6. **回写偏好 Cookie**：UI 切换成功后，按上节方法用 ego-browser 重新截获并写入 `preference_cookies.json`，使后续批次无需再次手动切换。
+6. **回写偏好 Cookie**：UI 切换成功后，按上节方法仅从已明确参数重新生成 `preference_cookies.json`，使后续批次无需再次手动切换。
 7. **人工交接条件**：若出现登录、账户选择、验证码、MFA、人机验证、浏览器安全警告、权限请求，或用户已接管浏览器，立即停止并交还用户。
 8. **接口回读验证**：UI 显示切换成功并不充分。必须重新执行一次本项目 CLI 预检/抓取，并确认会员状态接口返回币种与 `--currency` 完全一致后，才能开始或重跑商品抓取。
 9. **重跑限制**：用户完成切换并确认后，复用同一个专用浏览器会话最多重跑一次。若仍出现 `currency_mismatch`，保留诊断产物并报告会话币种未生效。

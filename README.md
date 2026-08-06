@@ -32,9 +32,9 @@ python3 kkday_get_scoreandprice.pyw \
 
 不要自动填写账号、密码或验证码，也不要尝试绕过挑战页。
 
-### 3. 连接已经开放 CDP 的浏览器
+### 3. 连接已经开放 CDP 的项目专用浏览器
 
-如果用户已有可连接的 Chrome/Edge 调试会话：
+如果 `KKdayScraper/browser-profiles` 下已有可连接的项目专用 Chrome/Edge 调试会话：
 
 ```bash
 python3 kkday_get_scoreandprice.pyw \
@@ -45,7 +45,7 @@ python3 kkday_get_scoreandprice.pyw \
   --result-dir "$HOME/Downloads/KKday_scraping/agent-result"
 ```
 
-不要同时传 `--launch-browser` 和自定义 `--cdp-url` 来表达两个候选会话。传入 `--launch-browser` 时，程序使用它启动或复用的专用浏览器端点。
+不要同时传 `--launch-browser` 和自定义 `--cdp-url` 来表达两个候选会话。传入 `--launch-browser` 时，程序使用它启动或复用的专用浏览器端点。`--cdp-url` 只接受本机 loopback HTTP 端口，并只从项目专用 Profile 的 `DevToolsActivePort` 解析连接；不接受直接 `ws://`/`wss://` 地址，也不会扫描或修改日常浏览器 Profile。
 
 ## 币种偏好 Cookie 自动注入
 
@@ -56,24 +56,25 @@ python3 kkday_get_scoreandprice.pyw \
 - 正常情况下该文件已存在目标币种（如 `currency=TWD`），无需任何手动操作，CLI 直接即可通过币种门禁。
 - Cookie 保留 host-only domain（`www.kkday.com`，不加前导点），以覆盖专用浏览器 Profile 中已有的同名币种 Cookie。
 
-### 重新截获并写入币种 Cookie
+### 重新生成币种偏好 Cookie
 
-当存储文件缺失、币种错误，或出现 `currency_mismatch` 时，用 ego-browser 从已加载 KKday 页面的真实浏览器截获偏好 Cookie：
+当存储文件缺失、币种错误，或出现 `currency_mismatch` 时，直接从本次已明确的 `--market` 与 `--currency` 构造三个非凭据偏好项。不要调用 CDP 的全量 Cookie API，也不要从登录浏览器读取、过滤或导出 Cookie：
 
 ```bash
-ego-browser nodejs <<'EOF'
-const task = await useOrCreateTaskSpace('capture kkday currency cookie')
-await openOrReuseTab('https://www.kkday.com/zh-tw', { wait: true, timeout: 30 })
-await wait(3)
-const { cookies } = await cdp('Network.getAllCookies', {})
-const keep = cookies.filter(c =>
-  ['currency','country_lang','lang_ui'].includes(c.name) &&
-  c.domain.replace(/^\./,'').endsWith('kkday.com'))
-cliLog(JSON.stringify(keep, null, 2))
-EOF
+python3 - <<'PY'
+from kkday_scraper.cookie_store import save_preference_cookies
+
+market = "zh-tw"
+currency = "TWD"
+save_preference_cookies([
+    {"name": "currency", "value": currency, "domain": "www.kkday.com", "path": "/", "secure": True, "httpOnly": True, "sameSite": "Lax"},
+    {"name": "country_lang", "value": market, "domain": "www.kkday.com", "path": "/", "secure": True, "httpOnly": True, "sameSite": "Lax"},
+    {"name": "lang_ui", "value": market, "domain": "www.kkday.com", "path": "/", "secure": True, "httpOnly": True, "sameSite": "Lax"},
+])
+PY
 ```
 
-然后用 `cookie_store.save_preference_cookies()` 写入（`domain` 保持截获到的原值，不要加前导点）。可一行验证：
+把示例中的 `market`、`currency` 替换为本次明确参数；`domain` 固定为 host-only `www.kkday.com`。可一行验证：
 
 ```bash
 python3 -c "from kkday_scraper.cookie_store import currency_from_store; print(currency_from_store())"
@@ -81,7 +82,7 @@ python3 -c "from kkday_scraper.cookie_store import currency_from_store; print(cu
 
 输出应为目标币种（如 `TWD`）。写入后重新运行 CLI，`probe_member` 回读即为目标币种。
 
-只有在偏好 Cookie 正确但服务端仍强制返回其他币种时（如依据 IP/账户偏好），才需要在专用浏览器中通过 UI（`button.header__currency` → `.currency` 选项）手动切换，切换后重新截获写回存储文件。不得通过 session/CSRF 等凭据或绕过挑战来设置币种。
+只有在偏好 Cookie 正确但服务端仍强制返回其他币种时（如依据 IP/账户偏好），才需要在专用浏览器中通过 UI（`button.header__currency` → `.currency` 选项）手动切换；切换后仍只按明确参数重新生成三个偏好项，并以会员状态接口回读验证。不得通过 session/CSRF 等凭据或绕过挑战来设置币种。
 
 ## CLI 入口规则
 
@@ -238,7 +239,7 @@ RESULT_DIR="/Users/tsimclaw/Documents/kkday-sku-price-scrape/$RUN_ID"
 保留进程退出码，并关注最后一个 `summary`。处理中按以下规则分流：
 
 - `401`、`403`、HTML challenge、验证码、MFA 或用户接管浏览器：停止自动操作，将项目专用浏览器交给用户。
-- `currency_mismatch`：先确认 `preference_cookies.json` 中 `currency` 等于目标币种（见“币种偏好 Cookie 自动注入”），缺失或错误时重新截获写入；若 Cookie 正确仍不生效，再用专用浏览器 UI 切换并回写。不得换算或重标价格。
+- `currency_mismatch`：先确认 `preference_cookies.json` 中 `currency` 等于目标币种（见“币种偏好 Cookie 自动注入”），缺失或错误时按明确参数重新生成；若 Cookie 正确仍不生效，再用专用浏览器 UI 切换并回写。不得换算或重标价格。
 - 参数或路径机械错误：修正明确错误后最多重试一次。
 - 用户完成登录、验证或币种调整并明确确认后：复用同一专用会话最多重跑一次。
 - 再次失败：保留原生诊断产物并报告，不进行无限重试。
@@ -253,7 +254,7 @@ RESULT_DIR="/Users/tsimclaw/Documents/kkday-sku-price-scrape/$RUN_ID"
 2. 在本次 `--market` 对应分站首页定位 `button.header__currency` 打开币种弹层，在 `.currency` 列表中只选择用户明确授权的目标币种。
 3. 每次点击、滚动或输入后重新读取 UI 状态。
 4. 出现登录、账户选择、验证码、MFA、人机验证、安全警告、权限请求或用户接管浏览器时，立即停止并交还用户。
-5. 切换成功后，用 ego-browser 重新截获并写回 `preference_cookies.json`，使后续批次自动生效。
+5. 切换成功后，仅按明确参数重新生成 `preference_cookies.json`，使后续批次自动生效；不得读取浏览器 Cookie 集合。
 6. 完成切换后必须重新执行一次 CLI 预检/抓取，确认会员状态接口返回的币种与 `--currency` 完全一致；只有此回读成功后才可重跑一次。
 
 不得通过 session/CSRF/Authorization 等凭据、DevTools 脚本注入或请求头篡改币种。如果重跑后仍是 `currency_mismatch`，保留原生诊断产物并报告会话币种未生效。
