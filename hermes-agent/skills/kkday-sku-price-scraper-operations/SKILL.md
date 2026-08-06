@@ -55,15 +55,67 @@ description: Use when Hermes or Hemis is asked to query, run, retry, diagnose, o
 每一次执行前都检查，任一失败即停止，不循环重试：
 
 1. `/System/Volumes/Data` 可用空间至少 2 GiB；不足时回复 `运行被阻止：数据卷可用空间不足 2 GiB`。
-2. `/usr/local/bin/python3.14` 存在，且版本为 Python 3.14 或更新。
+2. 解释器存在：生产机必须为 `/usr/local/bin/python3.14`（3.14 或更新）。若 3.14 缺失但 `/usr/local/bin/python3.13` 存在且能导入依赖，可在开发机临时使用 3.13（项目要求 3.11+）；不得使用 macOS 自带 `/usr/bin/python3`。
 3. 在项目目录验证依赖：
 
    ```bash
-   /usr/local/bin/python3.14 -c 'import openpyxl, playwright; print("runtime-ok")'
+   <解释器> -c 'import openpyxl, playwright; print("runtime-ok")'
    ```
 
 4. 已有登录中的 macOS 图形用户会话，且已安装 Edge 或 Chrome。
 5. 为本次运行创建唯一的绝对结果目录：`/Users/tsimclaw/Documents/kkday-sku-price-scrape/<运行ID>`。
+6. 确认币种偏好 Cookie 文件存在且币种正确（见下一节）。缺少或币种不符时先补齐再运行，不要直接触发 `currency_mismatch`。
+
+## 币种偏好 Cookie（自动注入）
+
+`--market` 只切换分站首页，不能保证会员状态接口返回 `--currency`。程序在 CDP 连接专用浏览器后、新建页面前，自动把持久化的站点偏好 Cookie 注入浏览器上下文，从而让会员接口回读目标币种。
+
+- 存储文件（Documents 下，便于在自动化机定位与备份）：
+  `~/Documents/KKdayScraper/preference_cookies.json`，权限 `0600`。
+- 由 `kkday_scraper/cookie_store.py` 管理，白名单只允许三个非凭据偏好：
+  `currency`、`country_lang`、`lang_ui`。session、CSRF、`KKWEB`、`datadome` 等凭据永不写入。
+- Cookie 保留 host-only domain（`www.kkday.com`，不加前导点），才能覆盖专用浏览器 Profile 中已有的同名币种 Cookie。
+
+### 运行前校验
+
+```bash
+<解释器> -c "from kkday_scraper.cookie_store import currency_from_store; print(currency_from_store())"
+```
+
+输出必须等于本次 `--currency`（如 `TWD`）。输出 `None` 或其他币种时，按下面步骤重新截获写入。
+
+### 截获并写入（缺失或币种错误时）
+
+用 ego-browser 从一个已正常加载 KKday 页面的浏览器读取偏好 Cookie：
+
+```bash
+ego-browser nodejs <<'EOF'
+const task = await useOrCreateTaskSpace('capture kkday currency cookie')
+await openOrReuseTab('https://www.kkday.com/zh-tw', { wait: true, timeout: 30 })
+await wait(3)
+const { cookies } = await cdp('Network.getAllCookies', {})
+const keep = cookies.filter(c =>
+  ['currency','country_lang','lang_ui'].includes(c.name) &&
+  c.domain.replace(/^\./,'').endsWith('kkday.com'))
+cliLog(JSON.stringify(keep, null, 2))
+EOF
+```
+
+把输出三项的 `name/value/domain/path/httpOnly/secure/sameSite/expires` 写入存储（`domain` 保持截获到的原值，不要加前导点）。可用一行完成：
+
+```bash
+<解释器> - <<'PY'
+from kkday_scraper.cookie_store import save_preference_cookies
+save_preference_cookies([
+  {"name":"currency","value":"TWD","domain":"www.kkday.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"},
+  {"name":"country_lang","value":"zh-tw","domain":"www.kkday.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"},
+  {"name":"lang_ui","value":"zh-tw","domain":"www.kkday.com","path":"/","httpOnly":True,"secure":True,"sameSite":"Lax"},
+])
+print("saved")
+PY
+```
+
+写入后再次运行上面的校验命令确认币种。目标为其他币种（如 `HKD`/`USD`）时，把 `currency` 的 `value` 改为对应三字母代码；若浏览器尚无该币种 Cookie，需先在专用浏览器 UI 中切换一次再截获。
 
 ## 参数构造与命令
 
@@ -96,10 +148,13 @@ Hermes 必须从其配置的 `skills.external_dirs` 读取本项目的 `hermes-a
 
 ## 登录、风控与货币安全
 
-- 不得读取、打印、导出、复制或修改 cookie、密码、授权头、CSRF token、OTP、会员标识或 DevTools WebSocket 标识。
+- 不得读取、打印、导出、复制或修改会话 Cookie、密码、授权头、CSRF token、OTP、会员标识或 DevTools WebSocket 标识。唯一例外是 `currency`、`country_lang`、`lang_ui` 三个站点偏好，且只能通过 `cookie_store` 写入 `~/Documents/KKdayScraper/preference_cookies.json`。
 - 不得自动填写凭据、绕过 CAPTCHA／DataDome／人机验证，或复制默认浏览器 Profile。
 - 如果输出为 `auth_required`、`401`、`403`、挑战 HTML 或需要人工验证，停止并请用户在可见的项目专用浏览器中完成登录／验证；用户确认后只重新运行一次。
-- 如果输出为 `currency_mismatch`，立即停止。不得换算、重标或交付这些价格；请用户先在可见 KKday 浏览器将会员币种切为本次 `--currency`，确认后只重新运行一次。
+- 如果输出为 `currency_mismatch`，立即停止，按以下顺序处理，不得换算、重标或交付这些价格：
+  1. 读取 `~/Documents/KKdayScraper/preference_cookies.json`，确认 `currency` 值等于本次 `--currency`。
+  2. 文件缺失或币种错误时，按上一节用 ego-browser 重新截获并写入，再重跑一次。
+  3. 文件正确但仍 mismatch，说明服务端依据 IP/账户偏好覆盖了 Cookie，请用户在可见专用浏览器 UI（`button.header__currency` → `.currency` 选项）切换到目标币种，确认后重新截获写回 Cookie 文件，再重跑一次。
 - 重新运行仍失败时，保留原生诊断产物并报告最终错误，不再提示登录或自动重试。
 
 ## 成功验收与交付
@@ -114,6 +169,39 @@ Hermes 必须从其配置的 `skills.external_dirs` 读取本项目的 `hermes-a
 | `4` | 部分商品失败或 `currency_mismatch` | 明确报告未完整成功，绝不声称价格已验证。 |
 
 完整成功时，交付原生 XLSX，并说明使用日期、市场、请求货币、商品数、可信价格行数及结果目录。部分失败时，仅在文件存在时附上原生产物并标记「部分结果，不代表全部商品成功」，同时给出退出码和 `failures.jsonl` 路径。不得从日志重建、修复或猜测被标记为 `schema_unknown`、`missing_price`、`minimum_mismatch` 或其他不可信的价格。
+
+## 自然语言触发速查
+
+用户用自然语言要求抓取时，按「自然语言解析优先级」解析参数，默认值必须显式传入命令。标准启动形态：
+
+```bash
+cd /Users/tsimclaw/Develop/kkday_get_scoreandprice
+RUN_ID="$(date +%Y%m%d_%H%M%S)"
+RESULT_DIR="/Users/tsimclaw/Documents/kkday-sku-price-scrape/$RUN_ID"
+/usr/local/bin/python3.14 kkday_get_scoreandprice.pyw \
+  --url '<商品URL>' \
+  --date <YYYY-MM-DD> \
+  --market <zh-tw|zh-hk> \
+  --currency <TWD|HKD|USD> \
+  --launch-browser \
+  --browser edge \
+  --result-dir "$RESULT_DIR"
+```
+
+- 多 URL：每个 URL 单独一个 `--url`，不要拼成一段。
+- 文件输入：用 `--input '/绝对路径/xxx.txt'` 或 `.xlsx`，可与 `--url` 混用。
+- 触发后无需人工操作：专用 Edge 由 `--launch-browser` 启动/复用，币种由偏好 Cookie 自动注入。
+- 抓取完成后交付 `$RESULT_DIR/kkday_price_results.xlsx`，并说明日期、市场、币种、商品数、可信行数、失败数。
+
+## 故障排查
+
+| 现象 | 处理 |
+| --- | --- |
+| `currency_mismatch` | 先核对/重写 `~/Documents/KKdayScraper/preference_cookies.json` 的 `currency`，再重跑；仍失败再请用户 UI 切换 |
+| `runtime-ok` 导入失败 | 解释器缺少 `openpyxl`/`playwright`；不得自行安装，报告阻塞 |
+| 专用 Edge 被 DataDome/CAPTCHA 挡住 | 停止，交还用户在可见专用浏览器完成验证，确认后只重跑一次 |
+| 端口被其他工作流占用或 CDP 不可达 | 不试探其他端口；用 `--launch-browser` 重启专用浏览器一次 |
+| 退出码 `4` 但 XLSX 存在 | 属于部分成功，读取 `失败与警告`/`failures.jsonl` 逐 URL 报告，不能宣称全部成功 |
 
 ## 禁止事项
 
