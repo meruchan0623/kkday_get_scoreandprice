@@ -126,7 +126,7 @@ def test_stale_dedicated_profile_is_quarantined_before_relaunch(
     assert not list(profile.glob("DevToolsActivePort.stale-*"))
 
 
-def test_new_profile_waits_for_matching_active_port_and_marks_owned_process(
+def test_new_profile_lets_browser_choose_port_and_marks_owned_process(
     tmp_path: Path,
 ) -> None:
     profile = tmp_path / "edge"
@@ -154,6 +154,7 @@ def test_new_profile_waits_for_matching_active_port_and_marks_owned_process(
     assert endpoint.owns_process is True
     assert endpoint.port == 49231
     assert calls[0][1]["start_new_session"] is True
+    assert "--remote-debugging-port=0" in calls[0][0]
     assert f"--user-data-dir={profile}" in calls[0][0]
 
 

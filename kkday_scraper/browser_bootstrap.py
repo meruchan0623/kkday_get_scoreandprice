@@ -265,7 +265,10 @@ class BrowserBootstrapper:
                 f"专用 {selected.value.title()} Profile 已运行但没有有效调试地址"
             )
 
-        port = self.port_factory()
+        # Chromium only persists DevToolsActivePort reliably when it selects
+        # the ephemeral port itself.  A fixed port can briefly listen without
+        # leaving the discovery file that this bootstrap contract requires.
+        port = 0
         command = build_browser_command(selected, profile_dir, port, homepage)
         try:
             process = self.process_factory(
@@ -290,7 +293,7 @@ class BrowserBootstrapper:
                 active_file,
                 selected,
                 profile_dir,
-                expected_port=port,
+                expected_port=None,
             )
             if endpoint is not None:
                 try:
