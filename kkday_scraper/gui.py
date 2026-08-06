@@ -4,12 +4,14 @@ import platform
 import queue
 import subprocess
 import tkinter as tk
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from time import monotonic
 
 from .exporter import RunExporter
+from .ego_browser import build_agent_handoff, default_task_space
 from .gui_state import (
     button_policy,
     readiness_labels,
@@ -18,8 +20,7 @@ from .gui_state import (
 from .inputs import deduplicate_inputs, load_manual_urls, load_txt, load_vendor_excel
 from .models import (
     AppEvent,
-    BrowserConnectionInfo,
-    BrowserKind,
+    EgoTaskSpaceInfo,
     EventKind,
     InputItem,
     ProductResult,
@@ -60,13 +61,13 @@ class KKdayScraperApp:
 
         self.date_var = tk.StringVar(value=default_usage_date().isoformat())
         self.market_var = tk.StringVar(value="zh-tw")
-        self.port_var = tk.StringVar(value="9222")
+        self.task_space_var = tk.StringVar(value=default_task_space("zh-tw"))
+        self.task_space_id_var = tk.StringVar(value="—")
         self.output_var = tk.StringVar(
             value=str(Path.home() / "Downloads" / "KKday_scraping")
         )
         self.browser_var = tk.StringVar(value="未连接")
-        self.browser_name_var = tk.StringVar(value="自动")
-        self.browser_profile_var = tk.StringVar(value="未启动")
+        self.last_handoff_prompt = ""
         self.member_var = tk.StringVar(value="待检测")
         self.product_var = tk.StringVar(value="待商品验证")
         self.sku_var = tk.StringVar(value="待商品验证")
@@ -86,21 +87,10 @@ class KKdayScraperApp:
 
         session = ttk.LabelFrame(outer, text="浏览器会话", padding=10)
         session.pack(fill=tk.X)
-        ttk.Label(session, text="浏览器").grid(row=0, column=0, sticky="w")
-        self.browser_combo = ttk.Combobox(
-            session,
-            textvariable=self.browser_name_var,
-            values=("自动", "Edge", "Chrome"),
-            state="readonly",
-            width=9,
-        )
-        self.browser_combo.grid(row=0, column=1, padx=(6, 14))
-        ttk.Label(session, text="现有 CDP 端口").grid(
-            row=0, column=2, sticky="w"
-        )
-        self.port_entry = ttk.Entry(session, textvariable=self.port_var, width=9)
-        self.port_entry.grid(row=0, column=3, padx=(6, 14))
-        ttk.Label(session, text="市场").grid(row=0, column=4, sticky="w")
+        ttk.Label(session, text="Task space").grid(row=0, column=0, sticky="w")
+        self.task_space_entry = ttk.Entry(session, textvariable=self.task_space_var, width=30)
+        self.task_space_entry.grid(row=0, column=1, padx=(6, 14))
+        ttk.Label(session, text="市场").grid(row=0, column=2, sticky="w")
         self.market_combo = ttk.Combobox(
             session,
             textvariable=self.market_var,
@@ -108,26 +98,22 @@ class KKdayScraperApp:
             state="readonly",
             width=9,
         )
-        self.market_combo.grid(row=0, column=5, padx=(6, 14))
+        self.market_combo.grid(row=0, column=3, padx=(6, 14))
         self.connect_button = ttk.Button(
-            session, text="连接现有浏览器", command=self._connect
+            session, text="打开/复用 ego-browser", command=self._connect
         )
-        self.connect_button.grid(row=0, column=6, padx=(0, 6))
-        self.bootstrap_button = ttk.Button(
-            session,
-            text="一键启动调试浏览器",
-            command=self._bootstrap_browser,
-        )
-        self.bootstrap_button.grid(row=0, column=7, padx=(0, 6))
+        self.connect_button.grid(row=0, column=4, padx=(0, 6))
         self.recheck_button = ttk.Button(
             session,
             text="重新检测登录态",
             command=self._recheck_session,
         )
-        self.recheck_button.grid(row=0, column=8, padx=(0, 10))
-        ttk.Label(session, text="币种：").grid(row=0, column=9, padx=(4, 0))
+        self.recheck_button.grid(row=0, column=5, padx=(0, 6))
+        self.copy_handoff_button = ttk.Button(session, text="复制 Agent 恢复提示词", command=self._copy_handoff)
+        self.copy_handoff_button.grid(row=0, column=6, padx=(0, 10))
+        ttk.Label(session, text="币种：").grid(row=0, column=7, padx=(4, 0))
         ttk.Label(session, textvariable=self.currency_var).grid(
-            row=0, column=10, sticky="w"
+            row=0, column=8, sticky="w"
         )
         ttk.Label(session, text="连接状态：").grid(
             row=1, column=0, pady=(8, 0)
@@ -135,8 +121,8 @@ class KKdayScraperApp:
         ttk.Label(session, textvariable=self.browser_var).grid(
             row=1, column=1, sticky="w", pady=(8, 0)
         )
-        ttk.Label(session, text="浏览器：").grid(row=1, column=2, pady=(8, 0))
-        ttk.Label(session, textvariable=self.browser_name_var).grid(
+        ttk.Label(session, text="Task ID：").grid(row=1, column=2, pady=(8, 0))
+        ttk.Label(session, textvariable=self.task_space_id_var).grid(
             row=1, column=3, sticky="w", pady=(8, 0)
         )
         ttk.Label(session, text="登录态：").grid(row=1, column=4, pady=(8, 0))
@@ -152,12 +138,6 @@ class KKdayScraperApp:
         )
         ttk.Label(session, textvariable=self.sku_var).grid(
             row=1, column=9, sticky="w", pady=(8, 0)
-        )
-        ttk.Label(session, text="Profile：").grid(
-            row=2, column=0, pady=(8, 0)
-        )
-        ttk.Label(session, textvariable=self.browser_profile_var).grid(
-            row=2, column=1, columnspan=4, sticky="w", pady=(8, 0)
         )
 
         input_frame = ttk.LabelFrame(outer, text="任务输入", padding=10)
@@ -274,13 +254,8 @@ class KKdayScraperApp:
     def _config(self) -> RunConfig:
         try:
             usage_date = date.fromisoformat(self.date_var.get().strip())
-            port = int(self.port_var.get().strip())
-            if not 1 <= port <= 65535:
-                raise ValueError
         except ValueError as exc:
-            raise ValueError(
-                "日期必须是 YYYY-MM-DD，CDP 端口必须是 1–65535 的整数"
-            ) from exc
+            raise ValueError("日期必须是 YYYY-MM-DD") from exc
 
         output_text = self.output_var.get().strip()
         if not output_text:
@@ -290,7 +265,7 @@ class KKdayScraperApp:
             usage_date=usage_date,
             output_dir=output,
             market=self.market_var.get(),
-            cdp_url=f"http://127.0.0.1:{port}",
+            ego_task_space=self.task_space_var.get().strip() or None,
         )
 
     def _checkpoint_factory(self, config: RunConfig):
@@ -309,26 +284,9 @@ class KKdayScraperApp:
         except ValueError as exc:
             messagebox.showerror("参数错误", str(exc))
             return
-        if self.worker.connect_existing(config):
+        if self.worker.connect(config):
             self.phase = RunPhase.CONNECTING
             self.status_var.set("正在连接现有浏览器…")
-            self._apply_policy()
-
-    def _selected_browser_kind(self) -> BrowserKind:
-        return {
-            "Edge": BrowserKind.EDGE,
-            "Chrome": BrowserKind.CHROME,
-        }.get(self.browser_combo.get(), BrowserKind.AUTO)
-
-    def _bootstrap_browser(self) -> None:
-        try:
-            config = self._session_config()
-        except ValueError as exc:
-            messagebox.showerror("参数错误", str(exc))
-            return
-        if self.worker.bootstrap_browser(config, self._selected_browser_kind()):
-            self.phase = RunPhase.BOOTSTRAPPING
-            self.status_var.set("正在启动 KKday 调试浏览器…")
             self._apply_policy()
 
     def _recheck_session(self) -> None:
@@ -341,6 +299,14 @@ class KKdayScraperApp:
             self.phase = RunPhase.CONNECTING
             self.status_var.set("正在重新检测 KKday 登录态…")
             self._apply_policy()
+
+    def _copy_handoff(self) -> None:
+        if not self.last_handoff_prompt:
+            messagebox.showinfo("暂无恢复提示", "当前没有需要复制的 Agent 恢复提示词")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.last_handoff_prompt)
+        self.status_var.set("已复制 Agent 恢复提示词")
 
     def _add_manual(self) -> None:
         try:
@@ -414,6 +380,7 @@ class KKdayScraperApp:
         except ValueError as exc:
             messagebox.showerror("参数错误", str(exc))
             return
+        config = replace(config, requested_count=len(self.inputs))
         if self.worker.run(self.inputs, config):
             self.result_tree.delete(*self.result_tree.get_children())
             self.last_result = None
@@ -457,20 +424,21 @@ class KKdayScraperApp:
             labels = readiness_labels(event.payload)
             self.session_ready = session_allows_product_preflight(event.payload)
             self.browser_var.set(labels.browser)
-            if self.browser_name_var.get() == "自动" and labels.browser == "已连接":
-                self.browser_name_var.set("现有 CDP")
             self.member_var.set(labels.member)
             self.product_var.set(labels.product)
             self.sku_var.set(labels.sku)
             self.currency_var.set(event.payload.currency or "—")
-        elif isinstance(event.payload, BrowserConnectionInfo):
-            self.browser_name_var.set(event.payload.browser.value.title())
-            self.port_var.set(str(event.payload.port))
-            self.browser_profile_var.set(
-                "已启动专用 Profile"
-                if event.payload.owns_process
-                else "复用专用 Profile"
-            )
+            if event.phase is RunPhase.BLOCKED:
+                handoff = build_agent_handoff(
+                    task_space_id=self.task_space_id_var.get(),
+                    task_space_name=self.task_space_var.get(),
+                    reason=event.payload.reason or event.message,
+                    product_url=event.payload.product_url,
+                )
+                self.last_handoff_prompt = str(handoff["agent_prompt"])
+        elif isinstance(event.payload, EgoTaskSpaceInfo):
+            self.task_space_var.set(event.payload.task_space_name)
+            self.task_space_id_var.set(str(event.payload.task_space_id or "—"))
         elif (
             event.kind is EventKind.PRODUCT_RESULT
             and isinstance(event.payload, ProductResult)
@@ -503,10 +471,6 @@ class KKdayScraperApp:
             if event.message.startswith("浏览器连接失败"):
                 self.browser_var.set("未连接")
                 self.member_var.set("异常")
-            elif event.message.startswith("一键启动调试浏览器失败"):
-                self.browser_var.set("未连接")
-                self.member_var.set("待检测")
-                self.browser_profile_var.set("未启动")
             elif event.message.startswith("重新检测登录态失败"):
                 self.member_var.set("异常")
 
@@ -529,9 +493,6 @@ class KKdayScraperApp:
         self.connect_button.configure(
             state=tk.NORMAL if policy.connect else tk.DISABLED
         )
-        self.bootstrap_button.configure(
-            state=tk.NORMAL if policy.bootstrap else tk.DISABLED
-        )
         self.recheck_button.configure(
             state=tk.NORMAL if policy.probe else tk.DISABLED
         )
@@ -548,9 +509,9 @@ class KKdayScraperApp:
         self.manual_text.configure(state=input_state)
         self.date_entry.configure(state=input_state)
         self.output_entry.configure(state=input_state)
-        self.port_entry.configure(state=input_state)
-        self.browser_combo.configure(
-            state="readonly" if policy.edit_inputs else tk.DISABLED
+        self.task_space_entry.configure(state=input_state)
+        self.copy_handoff_button.configure(
+            state=tk.NORMAL if self.last_handoff_prompt else tk.DISABLED
         )
         self.market_combo.configure(
             state="readonly" if policy.edit_inputs else tk.DISABLED

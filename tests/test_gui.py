@@ -90,7 +90,7 @@ def test_close_stops_waiting_after_the_shutdown_budget(monkeypatch) -> None:
 def test_config_rejects_an_empty_output_directory() -> None:
     app = KKdayScraperApp.__new__(KKdayScraperApp)
     app.date_var = FakeVar("2026-07-22")
-    app.port_var = FakeVar("9222")
+    app.task_space_var = FakeVar("kkday-sku-price-zh-tw")
     app.output_var = FakeVar("")
     app.market_var = FakeVar("zh-tw")
 
@@ -101,8 +101,9 @@ def test_config_rejects_an_empty_output_directory() -> None:
 def test_config_accepts_zh_hk_market(tmp_path) -> None:
     app = KKdayScraperApp.__new__(KKdayScraperApp)
     app.date_var = FakeVar("2026-07-22")
-    app.port_var = FakeVar("9222")
+    app.task_space_var = FakeVar("kkday-hk")
     app.output_var = FakeVar(str(tmp_path))
     app.market_var = FakeVar("zh-hk")
 
     assert app._config().market == "zh-hk"
+    assert app._config().ego_task_space == "kkday-hk"

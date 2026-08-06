@@ -48,20 +48,10 @@ def test_verifying_disables_edits_and_pause_but_allows_stop() -> None:
     assert policy.stop is True
 
 
-def test_bootstrap_phase_allows_stop_but_blocks_both_connect_actions() -> None:
-    policy = button_policy(RunPhase.BOOTSTRAPPING, True, False)
-
-    assert policy.connect is False
-    assert policy.bootstrap is False
-    assert policy.edit_inputs is False
-    assert policy.stop is True
-
-
 def test_auth_required_allows_reconnect_and_manual_login_probe() -> None:
     policy = button_policy(RunPhase.AUTH_REQUIRED, True, False)
 
     assert policy.connect is True
-    assert policy.bootstrap is True
     assert policy.probe is True
     assert policy.start is False
 

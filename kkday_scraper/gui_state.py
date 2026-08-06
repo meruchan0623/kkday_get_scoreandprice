@@ -6,7 +6,6 @@ from .models import RunPhase
 @dataclass(frozen=True)
 class ButtonPolicy:
     connect: bool
-    bootstrap: bool
     probe: bool
     edit_inputs: bool
     start: bool
@@ -63,7 +62,6 @@ def button_policy(
     session_ready: bool = True,
 ) -> ButtonPolicy:
     busy = phase in {
-        RunPhase.BOOTSTRAPPING,
         RunPhase.CONNECTING,
         RunPhase.VERIFYING,
         RunPhase.RUNNING,
@@ -72,16 +70,6 @@ def button_policy(
     }
     return ButtonPolicy(
         connect=phase
-        in {
-            RunPhase.IDLE,
-            RunPhase.AUTH_REQUIRED,
-            RunPhase.READY,
-            RunPhase.STOPPED,
-            RunPhase.BLOCKED,
-            RunPhase.COMPLETED,
-            RunPhase.FAILED,
-        },
-        bootstrap=phase
         in {
             RunPhase.IDLE,
             RunPhase.AUTH_REQUIRED,
@@ -100,12 +88,11 @@ def button_policy(
         resume=phase is RunPhase.PAUSED,
         stop=phase
         in {
-            RunPhase.BOOTSTRAPPING,
             RunPhase.VERIFYING,
             RunPhase.RUNNING,
             RunPhase.PAUSED,
         },
         export=has_results
         and phase
-        not in {RunPhase.BOOTSTRAPPING, RunPhase.CONNECTING, RunPhase.STOPPING},
+        not in {RunPhase.CONNECTING, RunPhase.STOPPING},
     )

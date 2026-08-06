@@ -73,9 +73,10 @@ def test_checkpoint_writes_stable_workbook_and_failure_ledger(
     output = exporter.checkpoint((make_product(),), final=True)
 
     assert output.exists()
+    assert output.name == "kkday_price_results.partial.xlsx"
     workbook = openpyxl.load_workbook(output, data_only=True)
-    assert workbook.sheetnames == ["可售SKU", "失败与警告", "运行摘要"]
-    sheet = workbook["可售SKU"]
+    assert workbook.sheetnames == ["抓取结果", "失败商品", "运行汇总"]
+    sheet = workbook["抓取结果"]
     headers = [cell.value for cell in sheet[1]]
     assert headers[:8] == [
         "厂商",
@@ -112,7 +113,7 @@ def test_exact_result_directory_does_not_add_a_timestamp_folder(
 
     output = exporter.checkpoint((make_product(),), final=True)
 
-    assert output == result_dir / "kkday_price_results.xlsx"
+    assert output == result_dir / "kkday_price_results.partial.xlsx"
     assert exporter.summary_path == result_dir / "run_summary.json"
 
 
@@ -178,7 +179,7 @@ def test_checkpoint_writes_one_batch_id_to_json_and_workbook(tmp_path: Path) -> 
     output = exporter.checkpoint((make_product(),), final=True)
 
     summary = __import__("json").loads(exporter.summary_path.read_text(encoding="utf-8"))
-    sheet = openpyxl.load_workbook(output, data_only=True)["运行摘要"]
+    sheet = openpyxl.load_workbook(output, data_only=True)["运行汇总"]
     workbook_summary = {row[0].value: row[1].value for row in sheet.iter_rows(min_row=2)}
     assert summary["batch_id"] == exporter.batch_id
     assert workbook_summary["批次ID"] == exporter.batch_id
@@ -202,7 +203,7 @@ def test_checkpoint_omits_unavailable_rows_by_default(tmp_path: Path) -> None:
     output = exporter.checkpoint((product,), final=False)
 
     workbook = openpyxl.load_workbook(output, data_only=True)
-    assert workbook["可售SKU"].max_row == 2
+    assert workbook["抓取结果"].max_row == 2
 
 
 def test_failed_checkpoint_preserves_previous_valid_workbook(
@@ -239,8 +240,8 @@ def test_remote_text_cannot_become_an_excel_formula(tmp_path: Path) -> None:
     output = exporter.checkpoint((product,), final=True)
 
     workbook = openpyxl.load_workbook(output, data_only=False)
-    assert workbook["可售SKU"]["E2"].value.startswith("'=")
-    assert workbook["可售SKU"]["P2"].value.startswith("'@")
+    assert workbook["抓取结果"]["E2"].value.startswith("'=")
+    assert workbook["抓取结果"]["P2"].value.startswith("'@")
 
 
 def test_checkpoint_sorts_tree_order_and_keeps_product_fields_on_first_row_only(
@@ -256,7 +257,7 @@ def test_checkpoint_sorts_tree_order_and_keeps_product_fields_on_first_row_only(
 
     output = exporter.checkpoint((product,), final=True)
 
-    sheet = openpyxl.load_workbook(output, data_only=True)["可售SKU"]
+    sheet = openpyxl.load_workbook(output, data_only=True)["抓取结果"]
     assert [sheet["R2"].value, sheet["R3"].value] == ["first", "later"]
     assert sheet["A2"].value == "TSIM 網址"
     assert sheet["E2"].value == "日本 eSIM"
@@ -264,3 +265,35 @@ def test_checkpoint_sorts_tree_order_and_keeps_product_fields_on_first_row_only(
     assert sheet["A3"].value is None
     assert sheet["E3"].value is None
     assert sheet["F3"].value is None
+
+
+def test_partial_checkpoint_has_explicit_name_and_covers_zero_sku_url(tmp_path: Path) -> None:
+    config = RunConfig(
+        date(2026, 7, 22),
+        tmp_path,
+        requested_count=20,
+        ego_task_space="kkday-20-products",
+    )
+    exporter = RunExporter(config)
+    product = ProductResult(
+        InputItem("https://www.kkday.com/zh-tw/product/121004-example"),
+        None,
+        (),
+    )
+
+    output = exporter.checkpoint((product,), final=False)
+
+    assert output.name == "kkday_price_results.partial.xlsx"
+    workbook = openpyxl.load_workbook(output, read_only=True)
+    try:
+        rows = list(workbook["失败商品"].iter_rows(values_only=True))
+        summary = dict(list(workbook["运行汇总"].iter_rows(values_only=True))[1:])
+    finally:
+        workbook.close()
+    assert any(
+        row[0] == "no_available_sku" and row[1] == product.input_item.url
+        for row in rows
+    )
+    assert summary["输入商品数"] == 20
+    assert summary["已处理商品数"] == 1
+    assert summary["Task space"] == "kkday-20-products"

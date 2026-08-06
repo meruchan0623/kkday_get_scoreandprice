@@ -86,6 +86,7 @@ class RunExporter:
             self.run_dir.mkdir(parents=True, exist_ok=True)
             self._claim_result_dir()
         self.output_path = self.run_dir / "kkday_price_results.xlsx"
+        self.partial_output_path = self.run_dir / "kkday_price_results.partial.xlsx"
         self.summary_path = self.run_dir / "run_summary.json"
         self.failures_path = self.run_dir / "failures.jsonl"
 
@@ -185,6 +186,7 @@ class RunExporter:
         failures = [
             failure for product in products for failure in product.failures
         ]
+        complete_success = final and not failures
         warnings = [
             (product.input_item.url, warning)
             for product in products
@@ -193,7 +195,7 @@ class RunExporter:
 
         workbook = openpyxl.Workbook()
         sku_sheet = workbook.active
-        sku_sheet.title = "可售SKU"
+        sku_sheet.title = "抓取结果"
         sku_sheet.append(BASE_FIELDS)
         for product, group in product_rows:
             for index, row in enumerate(group):
@@ -205,7 +207,7 @@ class RunExporter:
                     )
                 )
 
-        failure_sheet = workbook.create_sheet("失败与警告")
+        failure_sheet = workbook.create_sheet("失败商品")
         failure_sheet.append(["类型", "URL", "阶段", "消息", "可重试", "时间"])
         for failure in failures:
             failure_sheet.append(
@@ -228,16 +230,33 @@ class RunExporter:
                     for value in ["warning", url, "quality", warning, "否", ""]
                 ]
             )
+        failed_urls = {failure.url for failure in failures}
+        for product, group in product_rows:
+            if not group and product.input_item.url not in failed_urls:
+                failure_sheet.append(
+                    [
+                        "no_available_sku",
+                        excel_value(product.input_item.url),
+                        "business_result",
+                        "指定日期没有可导出的可售 SKU",
+                        "否",
+                        "",
+                    ]
+                )
 
-        summary_sheet = workbook.create_sheet("运行摘要")
+        summary_sheet = workbook.create_sheet("运行汇总")
         summary_sheet.append(["字段", "值"])
         summary_sheet.append(["批次ID", self.batch_id])
         summary_sheet.append(["运行ID", self.run_id])
         summary_sheet.append(["使用日期", self.config.usage_date.isoformat()])
-        summary_sheet.append(["商品完成数", len(products)])
+        summary_sheet.append(["输入商品数", self.config.requested_count or len(products)])
+        summary_sheet.append(["已处理商品数", len(products)])
+        summary_sheet.append(["成功商品数", sum(not product.failures for product in products)])
+        summary_sheet.append(["失败商品数", sum(bool(product.failures) for product in products)])
         summary_sheet.append(["导出SKU数", len(rows)])
         summary_sheet.append(["失败数", len(failures)])
-        summary_sheet.append(["状态", "final" if final else "partial"])
+        summary_sheet.append(["Task space", self.config.ego_task_space or f"kkday-sku-price-{self.config.market}"])
+        summary_sheet.append(["状态", "final" if complete_success else "partial"])
 
         for sheet in workbook.worksheets:
             for cell in sheet[1]:
@@ -263,7 +282,12 @@ class RunExporter:
             temp_workbook = Path(handle.name)
         try:
             workbook.save(temp_workbook)
-            os.replace(temp_workbook, self.output_path)
+            target_output = self.output_path if complete_success else self.partial_output_path
+            os.replace(temp_workbook, target_output)
+            if complete_success:
+                self.partial_output_path.unlink(missing_ok=True)
+            else:
+                self.output_path.unlink(missing_ok=True)
         finally:
             workbook.close()
             temp_workbook.unlink(missing_ok=True)
@@ -272,11 +296,14 @@ class RunExporter:
             "batch_id": self.batch_id,
             "run_id": self.run_id,
             "usage_date": self.config.usage_date.isoformat(),
-            "status": "final" if final else "partial",
+            "status": "final" if complete_success else "partial",
+            "requested_count": self.config.requested_count or len(products),
+            "processed_count": len(products),
             "product_count": len(products),
             "row_count": len(rows),
             "failure_count": len(failures),
-            "output": str(self.output_path),
+            "task_space": self.config.ego_task_space or f"kkday-sku-price-{self.config.market}",
+            "output": str(target_output),
         }
         self._atomic_text(
             self.summary_path,
@@ -302,7 +329,7 @@ class RunExporter:
             self._atomic_text(self.failures_path, "\n".join(lines) + "\n")
         else:
             self.failures_path.unlink(missing_ok=True)
-        return self.output_path
+        return target_output
 
     def _atomic_text(self, path: Path, content: str) -> None:
         with tempfile.NamedTemporaryFile(
