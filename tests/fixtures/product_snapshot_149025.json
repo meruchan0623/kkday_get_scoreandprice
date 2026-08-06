@@ -2,6 +2,15 @@
   "productId": "149025",
   "url": "https://www.kkday.com/zh-tw/product/149025-example",
   "name": "日本 eSIM｜SoftBank 5G 高速無限流量",
+  "destination": "日本",
+  "rating": 4.75,
+  "reviewCount": 241,
+  "soldCount": 2112,
+  "wishlistCount": 2061,
+  "pageMinPrice": 55,
+  "confirmation": "立即确认",
+  "cancellationPolicy": "商品一经订购完成后，即不可取消、更改订单，亦不得请求退款",
+  "features": ["日本当地信号", "iPhone XR 以上设备"],
   "packages": [
     {
       "packageId": "476215",

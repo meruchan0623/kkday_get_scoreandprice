@@ -76,6 +76,28 @@ def test_snapshot_reads_packages_without_clicking() -> None:
         "1982144",
     ]
     assert snapshot.packages[0].item_ids == ("221992",)
+    assert snapshot.destination == "日本"
+    assert snapshot.rating == 4.75
+    assert snapshot.review_count == 241
+    assert snapshot.sold_count == 2112
+    assert snapshot.wishlist_count == 2061
+    assert snapshot.page_min_price == 55
+    assert snapshot.confirmation == "立即确认"
+    assert snapshot.cancellation_policy.startswith("商品一经订购")
+    assert snapshot.features == ("日本当地信号", "iPhone XR 以上设备")
+
+
+def test_snapshot_uses_explicit_website_package_order() -> None:
+    raw = load_fixture("product_snapshot_149025.json")
+    raw["packages"] = list(reversed(raw["packages"]))
+    page = FakePage(raw)
+
+    snapshot = extract_product_snapshot(page, page.url)
+
+    assert [package.package_id for package in snapshot.packages] == [
+        "1982144",
+        "476215",
+    ]
 
 
 def test_snapshot_falls_back_to_numeric_product_id_from_url() -> None:

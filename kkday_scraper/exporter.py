@@ -11,7 +11,7 @@ import openpyxl
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
-from .models import ProductResult, RunConfig, SkuRow
+from .models import ProductResult, ProductSnapshot, RunConfig, SkuRow
 
 
 BASE_FIELDS = [
@@ -20,6 +20,15 @@ BASE_FIELDS = [
     "商品ID",
     "URL",
     "商品名称",
+    "目的地",
+    "评分",
+    "评论数",
+    "已售数量",
+    "收藏数",
+    "页面最低价",
+    "确认方式",
+    "取消政策",
+    "商品卖点",
     "套餐ID",
     "套餐名称",
     "ItemID",
@@ -59,13 +68,33 @@ class RunExporter:
         self.summary_path = self.run_dir / "run_summary.json"
         self.failures_path = self.run_dir / "failures.jsonl"
 
-    def _row_values(self, row: SkuRow) -> list:
-        values = [
+    def _row_values(
+        self,
+        row: SkuRow,
+        snapshot: ProductSnapshot | None,
+        *,
+        include_product_fields: bool,
+    ) -> list:
+        product_values = [
             row.vendor,
             row.input_order + 1,
             row.product_id,
             row.product_url,
             row.product_name,
+            snapshot.destination if snapshot else "",
+            snapshot.rating if snapshot else None,
+            snapshot.review_count if snapshot else None,
+            snapshot.sold_count if snapshot else None,
+            snapshot.wishlist_count if snapshot else None,
+            snapshot.page_min_price if snapshot else None,
+            snapshot.confirmation if snapshot else "",
+            snapshot.cancellation_policy if snapshot else "",
+            " | ".join(snapshot.features) if snapshot else "",
+        ]
+        if not include_product_fields:
+            product_values = [None] * len(product_values)
+        values = [
+            *product_values,
             row.package_id,
             row.package_name,
             row.item_id,
@@ -85,9 +114,15 @@ class RunExporter:
     def checkpoint(
         self, products: tuple[ProductResult, ...], final: bool
     ) -> Path:
-        rows = [row for product in products for row in product.rows]
-        if not self.config.include_unavailable:
-            rows = [row for row in rows if row.available]
+        ordered_products = sorted(products, key=lambda product: product.input_item.input_order)
+        product_rows: list[tuple[ProductResult, list[SkuRow]]] = []
+        for product in ordered_products:
+            rows = list(product.rows)
+            if not self.config.include_unavailable:
+                rows = [row for row in rows if row.available]
+            rows.sort(key=lambda row: row.tree_order)
+            product_rows.append((product, rows))
+        rows = [row for _product, group in product_rows for row in group]
         failures = [
             failure for product in products for failure in product.failures
         ]
@@ -101,8 +136,15 @@ class RunExporter:
         sku_sheet = workbook.active
         sku_sheet.title = "可售SKU"
         sku_sheet.append(BASE_FIELDS)
-        for row in rows:
-            sku_sheet.append(self._row_values(row))
+        for product, group in product_rows:
+            for index, row in enumerate(group):
+                sku_sheet.append(
+                    self._row_values(
+                        row,
+                        product.snapshot,
+                        include_product_fields=index == 0,
+                    )
+                )
 
         failure_sheet = workbook.create_sheet("失败与警告")
         failure_sheet.append(["类型", "URL", "阶段", "消息", "可重试", "时间"])

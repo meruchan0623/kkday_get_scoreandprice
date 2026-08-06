@@ -188,6 +188,15 @@ class ProductSnapshot:
     url: str
     name: str
     packages: tuple[PackageRef, ...]
+    destination: str = ""
+    rating: float | None = None
+    review_count: int | None = None
+    sold_count: int | None = None
+    wishlist_count: int | None = None
+    page_min_price: Decimal | None = None
+    confirmation: str = ""
+    cancellation_policy: str = ""
+    features: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -211,6 +220,7 @@ class SkuRow:
     price_status: PriceStatus
     note: str = ""
     captured_at: datetime = field(default_factory=datetime.now)
+    tree_order: tuple[int, ...] = ()
 
     @property
     def option_text(self) -> str:

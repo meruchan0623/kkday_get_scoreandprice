@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 from datetime import timedelta
+from decimal import Decimal
 from random import uniform
 from time import sleep
 from typing import Callable, Protocol
@@ -38,18 +39,41 @@ SNAPSHOT_SCRIPT = r"""
 () => {
   const option = window.__NUXT__ && window.__NUXT__.pinia && window.__NUXT__.pinia["option-section"];
   if (!option || !option.packages) return null;
+  const productStore = window.__NUXT__.pinia.product && window.__NUXT__.pinia.product.product;
+  const product = (productStore && productStore.prodInfo) || option.product || option.prodInfo || {};
+  const packageIds = Array.from(product.packages || option.product?.packages || []);
+  const packageById = option.packages;
+  const orderedPackages = packageIds.length
+    ? packageIds.map(id => packageById[String(id)]).filter(Boolean)
+    : Object.values(packageById);
   const match = location.pathname.match(/\/product\/(\d+)/);
   const productId = String((option.productSetting && option.productSetting.prod_mid) || (match && match[1]) || "");
   const title =
-    (option.product && (option.product.name || option.product.title)) ||
-    (option.prodInfo && (option.prodInfo.name || option.prodInfo.title)) ||
+    (product && (product.name || product.title)) ||
     (document.querySelector("h1") && document.querySelector("h1").textContent.trim()) ||
     document.title.replace(/\s*-\s*KKday\s*$/, "");
   return {
     productId,
     url: location.href,
     name: String(title || ""),
-    packages: Object.values(option.packages).map(pkg => ({
+    destination: String(product.destinations?.destinations?.[0]?.parent_name || ""),
+    rating: product.statistics?.rec_avg_score ?? null,
+    reviewCount: product.statistics?.rec_num ?? null,
+    soldCount: product.statistics?.order_num ?? null,
+    wishlistCount: product.statistics?.wishlist_num ?? null,
+    pageMinPrice: product.sale_price?.min_price ?? null,
+    confirmation: product.immediately_confirm ? "立即确认" : "",
+    cancellationPolicy: String(
+      product.description_module?.PMDL_REFUND_POLICY?.content?.properties?.policy_type?.desc || ""
+    ),
+    features: (() => {
+      const container = document.createElement("div");
+      container.innerHTML = String(product.feature || "");
+      return Array.from(container.querySelectorAll("li"))
+        .map(node => String(node.textContent || "").trim())
+        .filter(Boolean);
+    })(),
+    packages: orderedPackages.map(pkg => ({
       packageId: String(pkg.pkg_oid),
       name: String(pkg.name || ""),
       itemIds: (pkg.items || []).map(value => String(value)),
@@ -111,6 +135,15 @@ def extract_product_snapshot(page: PageLike, url: str) -> ProductSnapshot:
         url=url,
         name=str(raw.get("name") or ""),
         packages=packages,
+        destination=str(raw.get("destination") or ""),
+        rating=(float(raw["rating"]) if raw.get("rating") is not None else None),
+        review_count=(int(raw["reviewCount"]) if raw.get("reviewCount") is not None else None),
+        sold_count=(int(raw["soldCount"]) if raw.get("soldCount") is not None else None),
+        wishlist_count=(int(raw["wishlistCount"]) if raw.get("wishlistCount") is not None else None),
+        page_min_price=(Decimal(str(raw["pageMinPrice"])) if raw.get("pageMinPrice") is not None else None),
+        confirmation=str(raw.get("confirmation") or ""),
+        cancellation_policy=str(raw.get("cancellationPolicy") or ""),
+        features=tuple(str(value) for value in raw.get("features", []) if value),
     )
 
 
@@ -398,7 +431,7 @@ class ProductScraper:
                     break
 
                 package_rows = []
-                for item_id in package.item_ids:
+                for item_index, item_id in enumerate(package.item_ids):
                     package_rows.extend(
                         parse_item_payload(
                             payload=payload,
@@ -409,6 +442,8 @@ class ProductScraper:
                             item_id=item_id,
                             usage_date=config.usage_date,
                             currency=probe.currency,
+                            package_order=package_index,
+                            item_order=item_index,
                         )
                     )
                 if report.sku_api_ready is not True:

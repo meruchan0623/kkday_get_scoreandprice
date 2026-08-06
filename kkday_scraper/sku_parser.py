@@ -59,6 +59,8 @@ def parse_item_payload(
     usage_date: date,
     currency: str,
     event: str = "fullday",
+    package_order: int = 0,
+    item_order: int = 0,
 ) -> list[SkuRow]:
     try:
         item_data = payload["data"][str(item_id)]
@@ -78,6 +80,14 @@ def parse_item_payload(
         raise SchemaDriftError(f"item {item_id} 缺少 SKU 列表")
 
     option_maps = _spec_name_maps(item)
+    spec_order = [str(spec.get("spec_oid", "")) for spec in item.get("specs", [])]
+    option_order = {
+        spec_id: {
+            str(option.get("spec_item_oid", "")): index
+            for index, option in enumerate(spec.get("spec_items", []))
+        }
+        for spec_id, spec in zip(spec_order, item.get("specs", []))
+    }
     close_list = item_data.get("closeList") or {}
     day_saleable = bool(
         calendar_day
@@ -93,13 +103,17 @@ def parse_item_payload(
             raise SchemaDriftError(f"item {item_id} 的 SKU 缺少 sku_oid")
 
         options: list[str] = []
-        for spec_id, option_id in (sku.get("spec") or {}).items():
+        sku_spec = sku.get("spec") or {}
+        tree_position: list[int] = []
+        for spec_id in spec_order:
+            option_id = sku_spec.get(spec_id)
             option_name = option_maps.get(str(spec_id), {}).get(str(option_id))
             if not option_name:
                 raise SchemaDriftError(
                     f"SKU {sku_id} 无法解析规格 {spec_id}={option_id}"
                 )
             options.append(option_name)
+            tree_position.append(option_order[spec_id][str(option_id)])
 
         closed_events = close_list.get(sku_id, {}).get(
             usage_date.isoformat(), []
@@ -137,9 +151,10 @@ def parse_item_payload(
                 price_source=f"single_price.{event}" if sale_price is not None else "",
                 price_status=status,
                 note=note,
+                tree_order=(package_order, item_order, *tree_position),
             )
         )
-    return rows
+    return sorted(rows, key=lambda row: row.tree_order)
 
 
 def validate_package_minimum(

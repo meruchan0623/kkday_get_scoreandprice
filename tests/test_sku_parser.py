@@ -34,12 +34,15 @@ def test_parser_expands_options_and_excludes_closed_sku_from_available_set() -> 
     )
 
     assert len(rows) == 2
-    assert rows[0].options == ("500MB/日", "1 日")
-    assert rows[0].available is True
-    assert rows[0].sale_price == Decimal("711")
-    assert rows[0].price_status is PriceStatus.TRUSTED
-    assert rows[1].available is False
-    assert rows[1].price_status is PriceStatus.UNAVAILABLE
+    assert [row.options for row in rows] == [
+        ("無限流量（保證不降速）", "1 日"),
+        ("500MB/日", "1 日"),
+    ]
+    assert rows[0].available is False
+    assert rows[0].price_status is PriceStatus.UNAVAILABLE
+    assert rows[1].available is True
+    assert rows[1].sale_price == Decimal("711")
+    assert rows[1].price_status is PriceStatus.TRUSTED
 
 
 def test_parser_never_replaces_sale_price_with_official_price() -> None:
@@ -56,6 +59,63 @@ def test_parser_never_replaces_sale_price_with_official_price() -> None:
 
     assert rows[0].sale_price == Decimal("10741")
     assert rows[0].official_price == Decimal("21483")
+
+
+def test_parser_sorts_skus_by_website_spec_tree_not_api_array_order() -> None:
+    payload = {
+        "data": {
+            "item-1": {
+                "item": {
+                    "specs": [
+                        {
+                            "spec_oid": "traffic",
+                            "spec_items": [
+                                {"spec_item_oid": "1gb", "name": "1GB"},
+                                {"spec_item_oid": "3gb", "name": "3GB"},
+                            ],
+                        },
+                        {
+                            "spec_oid": "days",
+                            "spec_items": [
+                                {"spec_item_oid": "1d", "name": "1 日"},
+                                {"spec_item_oid": "3d", "name": "3 日"},
+                            ],
+                        },
+                    ],
+                    "skus": [
+                        {"sku_oid": "last", "spec": {"traffic": "3gb", "days": "3d"}, "single_price": {"fullday": 40}},
+                        {"sku_oid": "first", "spec": {"traffic": "1gb", "days": "1d"}, "single_price": {"fullday": 10}},
+                        {"sku_oid": "third", "spec": {"traffic": "3gb", "days": "1d"}, "single_price": {"fullday": 30}},
+                        {"sku_oid": "second", "spec": {"traffic": "1gb", "days": "3d"}, "single_price": {"fullday": 20}},
+                    ],
+                },
+                "calendar": {"2026-07-22": {"is_saleable": True, "is_sold_out": False, "events": ["fullday"]}},
+                "closeList": {},
+                "skusPriceCalendar": {},
+            }
+        }
+    }
+
+    rows = parse_item_payload(
+        payload=payload,
+        input_item=InputItem(url="https://www.kkday.com/zh-tw/product/1"),
+        product_id="1",
+        product_name="tree",
+        package=PackageRef("pkg", "package", ("item-1",)),
+        item_id="item-1",
+        usage_date=date(2026, 7, 22),
+        currency="TWD",
+        package_order=2,
+        item_order=3,
+    )
+
+    assert [row.sku_id for row in rows] == ["first", "second", "third", "last"]
+    assert [row.tree_order for row in rows] == [
+        (2, 3, 0, 0),
+        (2, 3, 0, 1),
+        (2, 3, 1, 0),
+        (2, 3, 1, 1),
+    ]
 
 
 def test_package_minimum_matches_available_sku_minimum() -> None:
