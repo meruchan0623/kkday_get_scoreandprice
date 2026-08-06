@@ -14,6 +14,8 @@ from .inputs import deduplicate_inputs, load_manual_urls, load_txt, load_vendor_
 from .models import (
     AppEvent,
     EventKind,
+    FailureRecord,
+    ProductResult,
     RunConfig,
     RunPhase,
     SUPPORTED_MARKETS,
@@ -98,6 +100,35 @@ def _report(event: AppEvent) -> None:
         details["current"] = event.current
     if event.total is not None:
         details["total"] = event.total
+    if isinstance(event.payload, FailureRecord):
+        details.update(
+            {
+                "product_url": event.payload.url,
+                "failure_kind": event.payload.kind.value,
+                "stage": event.payload.stage,
+                "retryable": event.payload.retryable,
+                "captured_at": event.payload.captured_at.isoformat(
+                    timespec="seconds"
+                ),
+            }
+        )
+    elif isinstance(event.payload, ProductResult):
+        details["product_url"] = event.payload.input_item.url
+        if event.payload.snapshot is not None:
+            details["product_id"] = event.payload.snapshot.product_id
+        if event.payload.failures:
+            details["failures"] = [
+                {
+                    "failure_kind": failure.kind.value,
+                    "stage": failure.stage,
+                    "message": failure.message,
+                    "retryable": failure.retryable,
+                    "captured_at": failure.captured_at.isoformat(
+                        timespec="seconds"
+                    ),
+                }
+                for failure in event.payload.failures
+            ]
     _emit(event.kind.value, event.message, **details)
 
 

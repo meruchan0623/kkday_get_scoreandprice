@@ -5,7 +5,17 @@ import pytest
 
 from kkday_scraper import cli
 from kkday_scraper.cli import build_parser, load_inputs
-from kkday_scraper.models import InputItem, ProductResult, RunPhase, RunResult, SessionProbe
+from kkday_scraper.models import (
+    AppEvent,
+    EventKind,
+    FailureKind,
+    FailureRecord,
+    InputItem,
+    ProductResult,
+    RunPhase,
+    RunResult,
+    SessionProbe,
+)
 
 
 def test_cli_accepts_a_complete_codex_driven_run(tmp_path: Path) -> None:
@@ -114,6 +124,41 @@ def test_cli_rejects_removed_browser_flags(legacy_flag: str) -> None:
             "--url", "https://www.kkday.com/zh-tw/product/149025-example", legacy_flag
         ])
     assert error.value.code == 2
+
+
+def test_cli_failure_event_explicitly_contains_product_and_failure_fields(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    failure = FailureRecord(
+        FailureKind.PRICE_MISMATCH,
+        "https://www.kkday.com/zh-tw/product/137689",
+        "package:1982098",
+        "SKU 最低价 53 与价格日历最低价 15 不一致",
+        True,
+    )
+    cli._report(
+        AppEvent(
+            EventKind.PRODUCT_RESULT,
+            "商品完成",
+            RunPhase.RUNNING,
+            3,
+            20,
+            ProductResult(InputItem(failure.url), None, (), (failure,)),
+        )
+    )
+
+    payload = __import__("json").loads(capsys.readouterr().out)
+    assert payload["type"] == "product_result"
+    assert payload["product_url"] == failure.url
+    assert payload["failures"] == [
+        {
+            "failure_kind": "price_mismatch",
+            "stage": "package:1982098",
+            "message": "SKU 最低价 53 与价格日历最低价 15 不一致",
+            "retryable": True,
+            "captured_at": failure.captured_at.isoformat(timespec="seconds"),
+        }
+    ]
 
 
 def test_cli_continues_to_public_product_preflight_without_login(
