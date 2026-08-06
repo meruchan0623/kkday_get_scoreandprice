@@ -4,9 +4,10 @@ import platform
 import queue
 import subprocess
 import tkinter as tk
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
+from time import monotonic
 
 from .exporter import RunExporter
 from .gui_state import (
@@ -31,6 +32,13 @@ from .models import (
 from .task_runner import WorkerService
 
 
+CLOSE_WAIT_SECONDS = 110.0
+
+
+def default_usage_date(today: date | None = None) -> date:
+    return (today or date.today()) + timedelta(days=1)
+
+
 class KKdayScraperApp:
     """Tk shell that delegates every browser operation to one worker thread."""
 
@@ -46,10 +54,11 @@ class KKdayScraperApp:
         self.last_result: RunResult | None = None
         self.last_output: Path | None = None
         self._closing = False
+        self._close_deadline: float | None = None
         self.events: queue.Queue[AppEvent] = queue.Queue()
         self.worker = WorkerService(self.events.put, self._checkpoint_factory)
 
-        self.date_var = tk.StringVar(value=date.today().isoformat())
+        self.date_var = tk.StringVar(value=default_usage_date().isoformat())
         self.market_var = tk.StringVar(value="zh-tw")
         self.port_var = tk.StringVar(value="9222")
         self.output_var = tk.StringVar(
@@ -576,6 +585,7 @@ class KKdayScraperApp:
         ):
             return
         self._closing = True
+        self._close_deadline = monotonic() + CLOSE_WAIT_SECONDS
         self.phase = RunPhase.STOPPING
         self.status_var.set("正在保存进度并关闭浏览器…")
         self._apply_policy()
@@ -584,6 +594,15 @@ class KKdayScraperApp:
 
     def _finish_close(self) -> None:
         if self.worker.is_alive():
+            if (
+                self._close_deadline is not None
+                and monotonic() >= self._close_deadline
+            ):
+                self.status_var.set(
+                    "关闭等待超时；任务线程将随应用退出，不会关闭附加浏览器"
+                )
+                self.root.destroy()
+                return
             self.root.after(100, self._finish_close)
             return
         self.root.destroy()

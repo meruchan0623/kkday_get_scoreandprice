@@ -76,6 +76,20 @@ def test_cli_allows_currency_to_override_the_twd_default() -> None:
     assert args.currency == "USD"
 
 
+def test_cli_rejects_non_ascii_currency_letters() -> None:
+    with pytest.raises(SystemExit) as error:
+        build_parser().parse_args(
+            [
+                "--url",
+                "https://www.kkday.com/zh-tw/product/149025-example",
+                "--currency",
+                "人民币",
+            ]
+        )
+
+    assert error.value.code == 2
+
+
 def test_cli_loads_and_deduplicates_url_and_txt_inputs(tmp_path: Path) -> None:
     url = "https://www.kkday.com/zh-tw/product/149025-example"
     source = tmp_path / "urls.txt"

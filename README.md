@@ -322,7 +322,7 @@ RESULT_DIR="/Users/tsimclaw/Documents/kkday-sku-price-scrape/$RUN_ID"
 python3 kkday_get_scoreandprice.pyw
 ```
 
-GUI 适合人工选择浏览器、登录、导入输入和查看状态；Agent 自动化应使用上面的 CLI 契约。
+GUI 适合人工选择浏览器、登录、导入输入和查看状态；Agent 自动化应使用上面的 CLI 契约。GUI 与 CLI 都默认使用本机下一个自然日。关闭窗口时会等待当前请求和最终检查点，最长 110 秒；超过预算后只退出本应用的守护工作线程，不会关闭附加浏览器或其共享 Context，最近一次已成功写入的检查点仍保留。
 
 ## 开发验证
 

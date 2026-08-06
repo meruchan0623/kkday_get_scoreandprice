@@ -40,7 +40,11 @@ def _iso_date(value: str) -> date:
 
 def _currency(value: str) -> str:
     normalized = value.strip().upper()
-    if len(normalized) != 3 or not normalized.isalpha():
+    if (
+        len(normalized) != 3
+        or not normalized.isascii()
+        or not normalized.isalpha()
+    ):
         raise argparse.ArgumentTypeError("币种必须是三个英文字母，例如 TWD")
     return normalized
 

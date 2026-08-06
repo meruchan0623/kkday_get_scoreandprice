@@ -1,6 +1,9 @@
+from datetime import date, timedelta
+
 import pytest
 
-from kkday_scraper.gui import KKdayScraperApp
+import kkday_scraper.gui as gui_module
+from kkday_scraper.gui import KKdayScraperApp, default_usage_date
 from kkday_scraper.models import RunPhase
 
 
@@ -39,6 +42,11 @@ class FakeVar:
         return self.value
 
 
+def test_gui_defaults_to_next_calendar_day() -> None:
+    assert default_usage_date(date(2026, 8, 6)) == date(2026, 8, 7)
+    assert default_usage_date(date(2026, 8, 6)) == date(2026, 8, 6) + timedelta(days=1)
+
+
 def test_close_waits_for_worker_flush_before_destroying_root() -> None:
     app = KKdayScraperApp.__new__(KKdayScraperApp)
     app.root = FakeRoot()
@@ -57,6 +65,26 @@ def test_close_waits_for_worker_flush_before_destroying_root() -> None:
     app.worker.alive = False
     app.root.callbacks.pop()()
     assert app.root.destroy_calls == 1
+
+
+def test_close_stops_waiting_after_the_shutdown_budget(monkeypatch) -> None:
+    now = [100.0]
+    monkeypatch.setattr(gui_module, "monotonic", lambda: now[0])
+    app = KKdayScraperApp.__new__(KKdayScraperApp)
+    app.root = FakeRoot()
+    app.worker = FakeWorker()
+    app.phase = RunPhase.IDLE
+    app._closing = False
+    app.status_var = FakeVar()
+    app._apply_policy = lambda: None
+
+    app._on_close()
+    now[0] += gui_module.CLOSE_WAIT_SECONDS + 0.1
+    app.root.callbacks.pop()()
+
+    assert app.worker.alive is True
+    assert app.root.destroy_calls == 1
+    assert "超时" in app.status_var.get()
 
 
 def test_config_rejects_an_empty_output_directory() -> None:
