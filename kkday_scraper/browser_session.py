@@ -16,6 +16,7 @@ from playwright.sync_api import (
     sync_playwright,
 )
 
+from .cookie_store import load_preference_cookies
 from .models import (
     BrowserConnectionInfo,
     BrowserEndpoint,
@@ -223,6 +224,17 @@ class BrowserSession:
             raise SessionUnavailableError("浏览器尚未连接")
         return self._page
 
+    def _inject_preference_cookies(self) -> None:
+        cookies = load_preference_cookies()
+        if not cookies:
+            return
+        try:
+            self._context.add_cookies(cookies)
+        except Exception:
+            # Non-fatal: probe_member will still detect a mismatch and we can
+            # surface it. Bad cookies must never crash the browser attach path.
+            pass
+
     def connect(
         self,
         allow_launch: bool = False,
@@ -249,6 +261,7 @@ class BrowserSession:
             if not self._browser.contexts:
                 raise SessionUnavailableError("CDP 浏览器没有可复用的默认上下文")
             self._context = self._browser.contexts[0]
+            self._inject_preference_cookies()
             self._page = self._context.new_page()
             self._owns_context = False
         except Exception as attach_error:
@@ -266,6 +279,13 @@ class BrowserSession:
             )
 
     def probe_member(self, market: str) -> SessionProbe:
+        # A dedicated browser can be reused from another KKday subsite.
+        # Probe only after entering the requested market's homepage.
+        self.page.goto(
+            market_homepage(market),
+            wait_until="domcontentloaded",
+            timeout=60_000,
+        )
         raw = self.page.evaluate(PROBE_SCRIPT, {"market": market})
         if not isinstance(raw, dict):
             raise SessionUnavailableError("浏览器会话检测返回了未知结构")
