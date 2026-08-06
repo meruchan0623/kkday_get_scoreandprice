@@ -58,19 +58,23 @@
 
 不要传输 `.git`、`__pycache__`、测试缓存、浏览器 Profile、结果目录或任何凭据。传输后对比源码清单/校验和。
 
-### 3. 安装系统级 Python 运行时
+### 3. 创建项目隔离运行时
 
-使用官方系统级 Python `/usr/local/bin/python3.14`。不要创建项目虚拟环境；也不得向 `/Users/tsimclaw/.hermes/hermes-agent/venv` 安装项目依赖或让项目升级 Hermes 的包。
+使用官方系统级 Python `/usr/local/bin/python3.14` 创建项目固定虚拟环境 `/Users/tsimclaw/Develop/kkday_get_scoreandprice/.venv`。不得向共享 user-site 或 `/Users/tsimclaw/.hermes/hermes-agent/venv` 安装项目依赖，也不得让项目升级 Hermes 的包。
 
 Apple 自带的 `/usr/bin/python3` 由系统保护，不能作为升级目标。Python 官方没有 LTS 分支；当前应使用官方最新稳定 Python 3.14 系列。若需要从 3.14.4 升级到更新的 3.14 补丁版，必须由具备 macOS 管理员授权的操作员安装 Python.org 签名的 macOS installer。
 
-目标命令形态：
+先在已验证源码工作树构建 wheel，再用带哈希的锁文件安装依赖；项目 wheel 使用 `--no-deps`，避免第二次解析依赖：
 
 ```bash
 cd /Users/tsimclaw/Develop/kkday_get_scoreandprice
-/usr/local/bin/python3.14 -m pip install --user --upgrade pip
-/usr/local/bin/python3.14 -m pip install --user .
+/usr/local/bin/python3.14 -m venv .venv
+.venv/bin/python -m pip install --require-hashes -r requirements.lock
+.venv/bin/python -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
+.venv/bin/python -m pip install --no-deps --force-reinstall dist/kkday_sku_price_scraper-2.0.0-py3-none-any.whl
 ```
+
+记录 `requirements.lock`、源码提交和 wheel 的 SHA-256。依赖或 Python 次版本变化时必须在受控开发环境重新生成并审查锁文件；运行任务时禁止现场升级。
 
 本项目连接系统已安装的 Edge/Chrome，不需要执行 `playwright install chromium` 下载额外浏览器。如 Playwright 版本确实要求辅助组件，先重新核对磁盘余量再安装。
 
@@ -88,10 +92,11 @@ cd /Users/tsimclaw/Develop/kkday_get_scoreandprice
 
 ```bash
 cd /Users/tsimclaw/Develop/kkday_get_scoreandprice
-/usr/local/bin/python3.14 --version
-/usr/local/bin/python3.14 -c 'import openpyxl, playwright; print("runtime-ok")'
-/usr/local/bin/python3.14 -m compileall -q kkday_scraper kkday_get_scoreandprice.pyw
-/usr/local/bin/python3.14 kkday_get_scoreandprice.pyw --help
+.venv/bin/python --version
+.venv/bin/python -c 'import openpyxl, playwright; print("runtime-ok")'
+.venv/bin/python -m pip check
+.venv/bin/python -m compileall -q kkday_scraper kkday_get_scoreandprice.pyw
+.venv/bin/python kkday_get_scoreandprice.pyw --help
 ```
 
 The CLI defaults are next local calendar day, `zh-tw`, and `TWD`. The Hermes project Skill must translate natural-language overrides into `--date`, `--market`, and `--currency`; it must not silently use the current day. A `currency_mismatch` result is a failed run, not a conversion request.
@@ -99,8 +104,10 @@ The CLI defaults are next local calendar day, `zh-tw`, and `TWD`. The Hermes pro
 若部署测试依赖，再运行：
 
 ```bash
-/usr/local/bin/python3.14 -m pytest -q -m 'not live'
+.venv/bin/python -m pytest -q -m 'not live'
 ```
+
+发布环境还必须使用独立审计工具执行 `pip-audit -r requirements.lock`；发现漏洞或审计工具不可用时不得把依赖门禁标为通过。
 
 ### 6. 浏览器与首次人工登录
 
@@ -118,7 +125,7 @@ The CLI defaults are next local calendar day, `zh-tw`, and `TWD`. The Hermes pro
 
 - 在磁盘低于门禁时“先装了再说”；
 - 使用系统 Python 3.9；
-- 把依赖装进 Hermes gateway 的虚拟环境；
+- 把依赖装进共享 user-site 或 Hermes gateway 的虚拟环境；
 - 复制任何浏览器默认 Profile、Cookie、密码或 DevTools WebSocket 地址；
 - 与现有 Trip/Ctrip 抓取器共用固定调试端口；
 - 只看到 Excel 文件就宣称部署或抓取成功；

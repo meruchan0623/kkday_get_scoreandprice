@@ -10,8 +10,12 @@
 
 ```bash
 cd /Users/tashima_meru/Develop/kkday_get_scoreandprice
-python3 -m pip install -e '.[dev]'
+python3 -m venv .venv
+.venv/bin/python -m pip install --require-hashes -r requirements.lock
+.venv/bin/python -m pip install --no-deps --no-build-isolation -e .
 ```
+
+`requirements.lock` 固定并校验 macOS arm64/x86_64、Python 3.11–3.14 的运行依赖；项目本身用 `--no-deps` 安装，避免再次解析宽范围依赖。开发测试可在同一隔离环境额外安装 `pytest>=8,<10`，但生产运行环境不得使用共享 user-site。
 
 ### 2. 运行单个商品
 
@@ -219,7 +223,7 @@ Agent 必须以进程退出码作为最终成功判断，不能只依据输出�
 cd /Users/tsimclaw/Develop/kkday_get_scoreandprice
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
 RESULT_DIR="/Users/tsimclaw/Documents/kkday-sku-price-scrape/$RUN_ID"
-/usr/local/bin/python3.14 kkday_get_scoreandprice.pyw \
+/Users/tsimclaw/Develop/kkday_get_scoreandprice/.venv/bin/python kkday_get_scoreandprice.pyw \
   --url 'https://www.kkday.com/zh-tw/product/121004' \
   --url 'https://www.kkday.com/zh-tw/product/149025' \
   --date 2026-08-06 \
@@ -230,7 +234,7 @@ RESULT_DIR="/Users/tsimclaw/Documents/kkday-sku-price-scrape/$RUN_ID"
   --result-dir "$RESULT_DIR"
 ```
 
-解释器路径以项目内 Skill 指定的版本为准（生产主机为 `/usr/local/bin/python3.14`）。在开发机上若 3.14 缺失但 `/usr/local/bin/python3.13` 已能导入 `openpyxl` 与 `playwright`，可使用 3.13（README 要求 3.11+）；运行前用 `python3 -c "import openpyxl, playwright"` 确认依赖可用。项目根目录与结果目录替换为当前主机的实际绝对路径。
+解释器路径以项目内 Skill 指定的预配置项目虚拟环境为准（生产主机为 `/Users/tsimclaw/Develop/kkday_get_scoreandprice/.venv/bin/python`）。该环境必须在部署阶段由官方 Python 3.14 创建并从 `requirements.lock` 安装；运行批次时不得临时创建环境或升级依赖。开发机可使用 Python 3.13 创建自己的项目 `.venv`（README 要求 3.11+）。项目根目录与结果目录替换为当前主机的实际绝对路径。
 
 默认使用 `--launch-browser` 启动或复用 KKday 专用 Profile。每次会员预检前，CLI 会依据 `--market` 自动导航到对应分站首页：`zh-tw` 为 `https://www.kkday.com/zh-tw`，`zh-hk` 为 `https://www.kkday.com/zh-hk`；这会切换页面分站，但不会伪造、换算或强制修改 KKday 会话返回的币种。只有项目专用浏览器已经准备好、端口明确且实例归属可验证时，才使用 `--cdp-url`；不得同时传入 `--launch-browser` 和 `--cdp-url`。
 

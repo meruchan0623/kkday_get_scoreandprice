@@ -9,11 +9,11 @@ description: Use when Hermes or Hemis is asked to query, run, retry, diagnose, o
 
 ```text
 项目：/Users/tsimclaw/Develop/kkday_get_scoreandprice
-解释器：/usr/local/bin/python3.14
+解释器：/Users/tsimclaw/Develop/kkday_get_scoreandprice/.venv/bin/python
 入口：/Users/tsimclaw/Develop/kkday_get_scoreandprice/kkday_get_scoreandprice.pyw
 ```
 
-不得创建或使用项目虚拟环境；不得使用 macOS 自带的 `/usr/bin/python3`、GUI、`python -m kkday_scraper.cli` 或复制出来的脚本。
+只使用部署阶段预配置并通过锁文件验收的项目 `.venv`；运行请求中不得创建、升级或修复环境。不得使用共享 user-site、Hermes 网关虚拟环境、macOS 自带的 `/usr/bin/python3`、GUI、`python -m kkday_scraper.cli` 或复制出来的脚本。
 
 ## 触发范围
 
@@ -55,7 +55,7 @@ description: Use when Hermes or Hemis is asked to query, run, retry, diagnose, o
 每一次执行前都检查，任一失败即停止，不循环重试：
 
 1. `/System/Volumes/Data` 可用空间至少 2 GiB；不足时回复 `运行被阻止：数据卷可用空间不足 2 GiB`。
-2. 解释器存在：生产机必须为 `/usr/local/bin/python3.14`（3.14 或更新）。若 3.14 缺失但 `/usr/local/bin/python3.13` 存在且能导入依赖，可在开发机临时使用 3.13（项目要求 3.11+）；不得使用 macOS 自带 `/usr/bin/python3`。
+2. 解释器存在：生产机必须为项目内 `.venv/bin/python`，且由官方 Python 3.14 和仓库 `requirements.lock` 在部署阶段创建。若缺失或导入失败，报告部署阻塞；运行请求中不得自行安装。开发机可用 Python 3.13 创建独立项目 `.venv`；不得使用 macOS 自带 `/usr/bin/python3`。
 3. 在项目目录验证依赖：
 
    ```bash
@@ -112,7 +112,7 @@ PY
 cd /Users/tsimclaw/Develop/kkday_get_scoreandprice
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
 RESULT_DIR="/Users/tsimclaw/Documents/kkday-sku-price-scrape/$RUN_ID"
-/usr/local/bin/python3.14 kkday_get_scoreandprice.pyw \
+/Users/tsimclaw/Develop/kkday_get_scoreandprice/.venv/bin/python kkday_get_scoreandprice.pyw \
   --url 'https://www.kkday.com/zh-tw/product/121004' \
   --date 2026-08-04 \
   --market zh-tw \
@@ -165,7 +165,7 @@ Hermes 必须从其配置的 `skills.external_dirs` 读取本项目的 `hermes-a
 cd /Users/tsimclaw/Develop/kkday_get_scoreandprice
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
 RESULT_DIR="/Users/tsimclaw/Documents/kkday-sku-price-scrape/$RUN_ID"
-/usr/local/bin/python3.14 kkday_get_scoreandprice.pyw \
+/Users/tsimclaw/Develop/kkday_get_scoreandprice/.venv/bin/python kkday_get_scoreandprice.pyw \
   --url '<商品URL>' \
   --date <YYYY-MM-DD> \
   --market <zh-tw|zh-hk> \
