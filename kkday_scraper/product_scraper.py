@@ -112,10 +112,16 @@ PAGE_DIAGNOSTIC_SCRIPT = r"""
 """
 
 
+class NoPackagesError(ValueError):
+    """The product exists, but exposes no currently scrapeable packages."""
+
+
 def extract_product_snapshot(page: PageLike, url: str) -> ProductSnapshot:
     raw = page.evaluate(SNAPSHOT_SCRIPT)
-    if not raw or not raw.get("packages"):
+    if not raw or "packages" not in raw:
         raise SchemaDriftError("Nuxt option-section 缺少商品或套餐结构")
+    if not raw["packages"]:
+        raise NoPackagesError("商品当前没有可抓取套餐")
     url_product_id = extract_product_id_from_url(url)
     page_product_id = str(raw.get("productId") or "")
     if page_product_id and re.fullmatch(r"\d+", page_product_id) is None:
@@ -261,6 +267,23 @@ class ProductScraper:
             )
             snapshot = extract_product_snapshot(self.page, input_item.url)
             publish(product_page_ready=True, reason=None)
+        except NoPackagesError as exc:
+            publish(product_page_ready=True, reason=str(exc))
+            return ProductResult(
+                input_item,
+                None,
+                (),
+                (
+                    FailureRecord(
+                        FailureKind.NO_PACKAGES,
+                        input_item.url,
+                        "snapshot",
+                        str(exc),
+                        False,
+                        input_item.input_order,
+                    ),
+                ),
+            )
         except SchemaDriftError as exc:
             publish(product_page_ready=False, reason=f"商品页结构异常：{exc}")
             return ProductResult(

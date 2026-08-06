@@ -13,6 +13,7 @@ from kkday_scraper.models import (
     SessionProbe,
 )
 from kkday_scraper.product_scraper import (
+    NoPackagesError,
     PAGE_DIAGNOSTIC_SCRIPT,
     ProductScraper,
     extract_product_snapshot,
@@ -125,6 +126,31 @@ def test_snapshot_requires_the_page_product_id_to_match_the_input_url() -> None:
 
     with pytest.raises(SchemaDriftError, match="不一致"):
         extract_product_snapshot(FakePage(raw), raw["url"])
+
+
+def test_snapshot_distinguishes_an_empty_package_business_state() -> None:
+    raw = load_fixture("product_snapshot_149025.json")
+    raw["packages"] = []
+
+    with pytest.raises(NoPackagesError, match="没有可抓取套餐"):
+        extract_product_snapshot(FakePage(raw), raw["url"])
+
+
+def test_scrape_reports_empty_packages_separately_from_schema_drift(
+    tmp_path: Path,
+) -> None:
+    raw = load_fixture("product_snapshot_149025.json")
+    raw["packages"] = []
+    page = FakePage(raw)
+
+    result = ProductScraper(page, FakeApi()).scrape(
+        InputItem(url=page.url),
+        probe(page),
+        RunConfig(date(2026, 7, 22), tmp_path),
+    )
+
+    assert result.failures[0].kind is FailureKind.NO_PACKAGES
+    assert result.failures[0].retryable is False
 
 
 def test_scrape_calls_each_package_once_and_returns_available_prices(

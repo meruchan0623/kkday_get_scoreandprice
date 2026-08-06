@@ -34,6 +34,7 @@ class PriceStatus(str, Enum):
 
 class FailureKind(str, Enum):
     INPUT = "input"
+    NO_PACKAGES = "no_packages"
     SESSION_BLOCKED = "session_blocked"
     SESSION_EXPIRED = "session_expired"
     NAVIGATION = "navigation"

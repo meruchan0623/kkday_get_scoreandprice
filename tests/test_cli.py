@@ -109,6 +109,21 @@ def test_cli_rejects_a_run_without_any_input() -> None:
     assert error.value.code == 2
 
 
+def test_cli_rejects_launch_browser_with_a_custom_cdp_url() -> None:
+    with pytest.raises(SystemExit) as error:
+        build_parser().parse_args(
+            [
+                "--url",
+                "https://www.kkday.com/zh-tw/product/149025-example",
+                "--launch-browser",
+                "--cdp-url",
+                "http://127.0.0.1:9333",
+            ]
+        )
+
+    assert error.value.code == 2
+
+
 def test_cli_continues_to_public_product_preflight_without_login(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

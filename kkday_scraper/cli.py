@@ -23,11 +23,16 @@ from .models import (
 from .task_runner import RunControl, TaskRunner
 
 
+DEFAULT_CDP_URL = "http://127.0.0.1:9222"
+
+
 class _RunParser(argparse.ArgumentParser):
     def parse_args(self, args: Sequence[str] | None = None, namespace=None):
         parsed = super().parse_args(args, namespace)
         if not parsed.urls and not parsed.inputs:
             self.error("至少需要一个 --url 或 --input")
+        if parsed.launch_browser and parsed.cdp_url != DEFAULT_CDP_URL:
+            self.error("--launch-browser 不能与自定义 --cdp-url 同时使用")
         return parsed
 
 
@@ -59,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date", dest="usage_date", type=_iso_date, default=date.today() + timedelta(days=1), help="使用日期，默认下一个自然日")
     parser.add_argument("--output", type=Path, default=Path.home() / "Downloads" / "KKday_scraping", help="输出根目录")
     parser.add_argument("--result-dir", type=Path, help="最终结果目录；不会再创建时间戳子目录")
-    parser.add_argument("--cdp-url", default="http://127.0.0.1:9222", help="现有浏览器 CDP 地址")
+    parser.add_argument("--cdp-url", default=DEFAULT_CDP_URL, help="现有浏览器 CDP 地址")
     parser.add_argument("--launch-browser", action="store_true", help="启动或复用 KKday 专用调试浏览器")
     parser.add_argument("--browser", choices=[kind.value for kind in BrowserKind], default=BrowserKind.AUTO.value, help="配合 --launch-browser 使用")
     parser.add_argument("--market", choices=SUPPORTED_MARKETS, default="zh-tw", help="KKday 站点，默认 zh-tw")
