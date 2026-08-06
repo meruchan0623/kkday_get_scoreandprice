@@ -17,9 +17,8 @@ def test_cli_accepts_a_complete_codex_driven_run(tmp_path: Path) -> None:
             "2026-07-22",
             "--output",
             str(tmp_path),
-            "--launch-browser",
-            "--browser",
-            "edge",
+            "--ego-task-space",
+            "kkday-20-products",
             "--market",
             "zh-hk",
         ]
@@ -30,8 +29,7 @@ def test_cli_accepts_a_complete_codex_driven_run(tmp_path: Path) -> None:
     ]
     assert args.usage_date == date(2026, 7, 22)
     assert args.output == tmp_path
-    assert args.launch_browser is True
-    assert args.browser == "edge"
+    assert args.ego_task_space == "kkday-20-products"
     assert args.market == "zh-hk"
 
 
@@ -109,18 +107,12 @@ def test_cli_rejects_a_run_without_any_input() -> None:
     assert error.value.code == 2
 
 
-def test_cli_rejects_launch_browser_with_a_custom_cdp_url() -> None:
+@pytest.mark.parametrize("legacy_flag", ["--launch-browser", "--cdp-url", "--browser"])
+def test_cli_rejects_removed_browser_flags(legacy_flag: str) -> None:
     with pytest.raises(SystemExit) as error:
-        build_parser().parse_args(
-            [
-                "--url",
-                "https://www.kkday.com/zh-tw/product/149025-example",
-                "--launch-browser",
-                "--cdp-url",
-                "http://127.0.0.1:9333",
-            ]
-        )
-
+        build_parser().parse_args([
+            "--url", "https://www.kkday.com/zh-tw/product/149025-example", legacy_flag
+        ])
     assert error.value.code == 2
 
 

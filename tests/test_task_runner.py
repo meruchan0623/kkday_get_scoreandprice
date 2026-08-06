@@ -5,9 +5,6 @@ from threading import Event, get_ident, main_thread
 from kkday_scraper.browser_api import SessionBlockedError
 from kkday_scraper.models import (
     AppEvent,
-    BrowserConnectionInfo,
-    BrowserEndpoint,
-    BrowserKind,
     EventKind,
     InputItem,
     ProductResult,
@@ -454,7 +451,6 @@ def test_worker_keeps_all_session_calls_on_one_background_thread(
     ready = Event()
     finished = Event()
     calls: list[tuple[str, int]] = []
-    launch_permissions: list[bool] = []
 
     class ThreadSession:
         def __init__(self, _config: RunConfig) -> None:
@@ -465,9 +461,8 @@ def test_worker_keeps_all_session_calls_on_one_background_thread(
             calls.append(("page", get_ident()))
             return object()
 
-        def connect(self, allow_launch: bool = True) -> None:
+        def connect(self) -> None:
             calls.append(("connect", get_ident()))
-            launch_permissions.append(allow_launch)
 
         def probe_member(self, market: str) -> SessionProbe:
             calls.append(("probe", get_ident()))
@@ -501,81 +496,6 @@ def test_worker_keeps_all_session_calls_on_one_background_thread(
     assert len(session_thread_ids) == 1
     assert next(iter(session_thread_ids)) != main_thread().ident
     assert [name for name, _ in calls][-1] == "close"
-    assert launch_permissions == [False]
-
-
-def test_worker_bootstrap_allows_public_preflight_without_member_login(
-    tmp_path: Path,
-) -> None:
-    ready = Event()
-    endpoint = BrowserEndpoint(
-        BrowserKind.EDGE,
-        49231,
-        "ws://127.0.0.1:49231/devtools/browser/private-session",
-        tmp_path / "edge",
-        True,
-    )
-
-    class FakeBootstrapper:
-        def start(self, browser, homepage=None):
-            assert browser is BrowserKind.EDGE
-            assert homepage == "https://www.kkday.com/zh-hk"
-            return endpoint
-
-    class FakeSession:
-        page = object()
-
-        def __init__(self, _config):
-            self.connect_endpoints = []
-
-        def connect(self, allow_launch=False, endpoint=None):
-            assert allow_launch is False
-            self.connect_endpoints.append(endpoint)
-
-        def probe_member(self, market):
-            ready.set()
-            return SessionProbe(
-                True,
-                True,
-                False,
-                "KRW",
-                market,
-                "https://www.kkday.com/zh-tw",
-            )
-
-        def close(self):
-            pass
-
-    events = []
-    config = RunConfig(date(2026, 7, 22), tmp_path, market="zh-hk")
-    worker = WorkerService(
-        events.append,
-        lambda _config: lambda _products, _final: None,
-        session_factory=FakeSession,
-        bootstrapper_factory=FakeBootstrapper,
-    )
-    try:
-        assert worker.bootstrap_browser(config, BrowserKind.EDGE)
-        assert ready.wait(2)
-        readiness = next(
-            event
-            for event in events
-            if event.kind is EventKind.READINESS
-        )
-        assert readiness.phase is RunPhase.READY
-        assert "公开商品" in readiness.message
-        assert isinstance(
-            next(
-                event.payload
-                for event in events
-                if isinstance(event.payload, BrowserConnectionInfo)
-            ),
-            BrowserConnectionInfo,
-        )
-        assert all("private-session" not in event.message for event in events)
-    finally:
-        worker.shutdown()
-        worker._thread.join(2)
 
 
 def test_worker_recheck_after_manual_login_reuses_same_session(
@@ -632,7 +552,7 @@ def test_worker_recheck_after_manual_login_reuses_same_session(
         session_factory=FakeSession,
     )
     try:
-        assert worker.connect_existing(config)
+        assert worker.connect(config)
         assert first_probe_done.wait(2)
         assert worker.probe_current_session(config)
         assert probe_done.wait(2)
@@ -671,7 +591,7 @@ def test_worker_connection_failure_clears_readiness_layers(tmp_path: Path) -> No
         session_factory=FailingSession,
     )
     try:
-        assert worker.connect_existing(RunConfig(date(2026, 7, 22), tmp_path))
+        assert worker.connect(RunConfig(date(2026, 7, 22), tmp_path))
         for _ in range(20):
             if any(event.kind is EventKind.FAILURE for event in events):
                 break
@@ -683,57 +603,6 @@ def test_worker_connection_failure_clears_readiness_layers(tmp_path: Path) -> No
         assert readiness.payload.member_api_ready is False
         assert readiness.payload.product_page_ready is None
         assert readiness.payload.sku_api_ready is None
-    finally:
-        worker.shutdown()
-        worker._thread.join(2)
-
-
-def test_stop_before_bootstrap_does_not_poison_next_operation(tmp_path: Path) -> None:
-    started = Event()
-    endpoint = BrowserEndpoint(
-        BrowserKind.EDGE,
-        49234,
-        "ws://127.0.0.1:49234/devtools/browser/private-session",
-        tmp_path / "edge",
-        True,
-    )
-
-    class FakeBootstrapper:
-        def start(self, _browser, _homepage=None):
-            started.set()
-            return endpoint
-
-    class FakeSession:
-        page = object()
-
-        def __init__(self, _config):
-            pass
-
-        def connect(self, allow_launch=False, endpoint=None):
-            pass
-
-        def probe_member(self, market):
-            return SessionProbe(
-                True, True, True, "KRW", market, "https://www.kkday.com/zh-tw"
-            )
-
-        def close(self):
-            pass
-
-    events = []
-    worker = WorkerService(
-        events.append,
-        lambda _config: lambda _products, _final: None,
-        session_factory=FakeSession,
-        bootstrapper_factory=FakeBootstrapper,
-    )
-    try:
-        worker.stop()
-        assert worker.bootstrap_browser(
-            RunConfig(date(2026, 7, 22), tmp_path), BrowserKind.EDGE
-        )
-        assert started.wait(2)
-        assert any(event.phase is RunPhase.READY for event in events)
     finally:
         worker.shutdown()
         worker._thread.join(2)
@@ -768,9 +637,9 @@ def test_worker_serializes_connection_and_run_operations(tmp_path: Path) -> None
     )
     config = RunConfig(date(2026, 7, 22), tmp_path)
     try:
-        assert worker.connect_existing(config)
+        assert worker.connect(config)
         assert started.wait(2)
-        assert worker.connect_existing(config) is False
+        assert worker.connect(config) is False
         assert worker.run([], config) is False
     finally:
         worker.stop()

@@ -3,8 +3,6 @@ from decimal import Decimal
 from pathlib import Path
 
 from kkday_scraper.models import (
-    BrowserEndpoint,
-    BrowserKind,
     InputItem,
     PriceStatus,
     ReadinessReport,
@@ -20,7 +18,7 @@ def test_run_config_has_safe_finite_defaults(tmp_path: Path) -> None:
 
     assert config.market == "zh-tw"
     assert config.currency == "TWD"
-    assert config.cdp_url == "http://127.0.0.1:9222"
+    assert config.ego_task_space is None
     assert config.request_timeout_ms == 30_000
     assert config.request_retry_delays == (1.0, 3.0)
     assert config.product_delay_range == (2.0, 4.0)
@@ -88,17 +86,3 @@ def test_member_probe_does_not_claim_business_readiness() -> None:
 
 def test_verifying_is_a_distinct_run_phase() -> None:
     assert RunPhase.VERIFYING.value == "verifying"
-
-
-def test_browser_endpoint_keeps_websocket_url_runtime_only() -> None:
-    endpoint = BrowserEndpoint(
-        browser=BrowserKind.EDGE,
-        port=9222,
-        ws_url="ws://127.0.0.1:9222/devtools/browser/secret",
-        profile_dir=Path("/tmp/kkday-profile"),
-        owns_process=True,
-    )
-
-    assert endpoint.browser is BrowserKind.EDGE
-    assert endpoint.port == 9222
-    assert "secret" not in repr(endpoint)

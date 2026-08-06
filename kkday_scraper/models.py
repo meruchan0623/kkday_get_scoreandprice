@@ -10,7 +10,6 @@ from typing import Any
 
 class RunPhase(str, Enum):
     IDLE = "idle"
-    BOOTSTRAPPING = "bootstrapping"
     CONNECTING = "connecting"
     AUTH_REQUIRED = "auth_required"
     READY = "ready"
@@ -54,44 +53,13 @@ class EventKind(str, Enum):
     PRODUCT_RESULT = "product_result"
     FAILURE = "failure"
     FINISHED = "finished"
-
-
-class BrowserKind(str, Enum):
-    AUTO = "auto"
-    EDGE = "edge"
-    CHROME = "chrome"
-
-
-@dataclass(frozen=True, repr=False)
-class BrowserEndpoint:
-    """Runtime-only browser connection details.
-
-    The WebSocket URL contains a transient DevTools session id.  Keeping it
-    out of ``repr`` makes accidental log/event serialization less likely.
-    """
-
-    browser: BrowserKind
-    port: int
-    ws_url: str = field(repr=False)
-    profile_dir: Path
-    owns_process: bool
-
-    def __repr__(self) -> str:
-        return (
-            "BrowserEndpoint("
-            f"browser={self.browser!r}, port={self.port!r}, "
-            f"profile_dir={self.profile_dir!r}, owns_process={self.owns_process!r})"
-        )
+    HANDOFF_REQUIRED = "handoff_required"
 
 
 @dataclass(frozen=True)
-class BrowserConnectionInfo:
-    """Safe browser status for GUI events; it deliberately has no ws_url."""
-
-    browser: BrowserKind
-    port: int
-    profile_dir: Path
-    owns_process: bool
+class EgoTaskSpaceInfo:
+    task_space_id: int | str | None
+    task_space_name: str
 
 
 @dataclass(frozen=True)
@@ -118,7 +86,8 @@ class RunConfig:
     usage_date: date
     output_dir: Path
     market: str = "zh-tw"
-    cdp_url: str = "http://127.0.0.1:9222"
+    ego_task_space: str | None = None
+    requested_count: int | None = None
     currency: str = "TWD"
     request_timeout_ms: int = 30_000
     request_retry_delays: tuple[float, ...] = (1.0, 3.0)

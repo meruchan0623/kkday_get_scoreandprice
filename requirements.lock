@@ -1,19 +1,8 @@
 # Runtime dependency lock for macOS arm64/x86_64 and Python 3.11-3.14.
-# Regenerate deliberately when pyproject.toml dependency ranges change.
+# ego-browser is supplied by ego lite and is invoked as a CLI, not installed by pip.
 et-xmlfile==2.0.0 \
     --hash=sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa
-greenlet==3.2.4 \
-    --hash=sha256:96378df1de302bc38e99c3a9aa311967b7dc80ced1dcc6f171e99842987882a2 \
-    --hash=sha256:3b67ca49f54cede0186854a008109d6ee71f66bd57bb36abd6d0a0267b540cdd \
-    --hash=sha256:1a921e542453fe531144e91e1feedf12e07351b1cf6c9e8a3325ea600a715a31 \
-    --hash=sha256:49a30d5fda2507ae77be16479bdb62a660fa51b1eb4928b524975b3bde77b3c0
 openpyxl==3.1.5 \
     --hash=sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2
-playwright==1.55.0 \
-    --hash=sha256:25b0d6b3fd991c315cca33c802cf617d52980108ab8431e3e1d37b5de755c10e
-pyee==13.0.0 \
-    --hash=sha256:48195a3cddb3b1515ce0695ed76036b5ccc2ef3a9f963ff9f77aec0139845498
 setuptools==83.0.0 \
     --hash=sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3
-typing-extensions==4.12.2 \
-    --hash=sha256:04e5ca0351e0f3f85c6853954072df659d0d13fac324d0072316b67d7794700d

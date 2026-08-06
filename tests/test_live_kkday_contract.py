@@ -20,9 +20,9 @@ pytestmark = pytest.mark.live
 
 def test_live_browser_context_returns_complete_sku_prices(tmp_path: Path) -> None:
     url = os.environ.get("KKDAY_LIVE_URL")
-    cdp_url = os.environ.get("KKDAY_CDP_URL")
-    if not url or not cdp_url:
-        pytest.skip("set KKDAY_LIVE_URL and KKDAY_CDP_URL to run live contract test")
+    task_space = os.environ.get("KKDAY_EGO_TASK_SPACE")
+    if not url or not task_space:
+        pytest.skip("set KKDAY_LIVE_URL and KKDAY_EGO_TASK_SPACE to run live contract test")
 
     usage_date = date.fromisoformat(
         os.environ.get("KKDAY_USAGE_DATE", date.today().isoformat())
@@ -30,7 +30,7 @@ def test_live_browser_context_returns_complete_sku_prices(tmp_path: Path) -> Non
     config = RunConfig(
         usage_date=usage_date,
         output_dir=tmp_path,
-        cdp_url=cdp_url,
+        ego_task_space=task_space,
     )
     session = BrowserSession(config)
     try:

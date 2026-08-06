@@ -11,13 +11,10 @@ from time import sleep
 from typing import Callable, Protocol
 
 from .browser_api import BrowserApiClient, SessionBlockedError, SessionExpiredError
-from .browser_bootstrap import BrowserBootstrapper
-from .browser_session import BrowserSession, browser_connection_info_for_cdp
+from .browser_session import BrowserSession
 from .models import (
     AppEvent,
-    BrowserConnectionInfo,
-    BrowserEndpoint,
-    BrowserKind,
+    EgoTaskSpaceInfo,
     EventKind,
     FailureKind,
     FailureRecord,
@@ -27,7 +24,6 @@ from .models import (
     RunConfig,
     RunPhase,
     RunResult,
-    market_homepage,
 )
 from .product_scraper import ProductScraper
 
@@ -40,11 +36,7 @@ class SessionLike(Protocol):
     @property
     def page(self) -> object: ...
 
-    def connect(
-        self,
-        allow_launch: bool = False,
-        endpoint: BrowserEndpoint | None = None,
-    ) -> None: ...
+    def connect(self) -> None: ...
 
     def probe_member(self, market: str): ...
 
@@ -401,7 +393,6 @@ class TaskRunner:
 
 
 class WorkerCommandKind(str, Enum):
-    BOOTSTRAP = "bootstrap"
     CONNECT = "connect"
     PROBE = "probe"
     RUN = "run"
@@ -414,7 +405,6 @@ class WorkerCommand:
     config: RunConfig | None = None
     items: tuple[InputItem, ...] = ()
     control: RunControl | None = None
-    browser_kind: BrowserKind = BrowserKind.AUTO
     operation_control: RunControl | None = None
 
 
@@ -424,12 +414,10 @@ class WorkerService:
         reporter: Reporter,
         checkpoint_factory: Callable[[RunConfig], Checkpoint],
         session_factory: Callable[[RunConfig], SessionLike] = BrowserSession,
-        bootstrapper_factory: Callable[[], BrowserBootstrapper] = BrowserBootstrapper,
     ) -> None:
         self.reporter = reporter
         self.checkpoint_factory = checkpoint_factory
         self.session_factory = session_factory
-        self.bootstrapper_factory = bootstrapper_factory
         self.commands: Queue[WorkerCommand] = Queue()
         self.control = RunControl()
         self._state_lock = Lock()
@@ -445,9 +433,6 @@ class WorkerService:
         self._thread.start()
 
     def connect(self, config: RunConfig) -> bool:
-        return self.connect_existing(config)
-
-    def connect_existing(self, config: RunConfig) -> bool:
         with self._state_lock:
             accepted = (
                 not self._shutdown_requested
@@ -464,31 +449,6 @@ class WorkerService:
             WorkerCommand(
                 WorkerCommandKind.CONNECT,
                 config,
-                operation_control=operation_control,
-            )
-        )
-        return True
-
-    def bootstrap_browser(
-        self, config: RunConfig, browser: BrowserKind = BrowserKind.AUTO
-    ) -> bool:
-        with self._state_lock:
-            accepted = (
-                not self._shutdown_requested
-                and not self._run_active
-                and self._operation_control is None
-            )
-            operation_control = RunControl() if accepted else None
-            if operation_control is not None:
-                self._operation_control = operation_control
-        if not accepted:
-            self.reporter(AppEvent(EventKind.LOG, "当前任务尚未结束，无法启动浏览器"))
-            return False
-        self.commands.put(
-            WorkerCommand(
-                WorkerCommandKind.BOOTSTRAP,
-                config,
-                browser_kind=browser,
                 operation_control=operation_control,
             )
         )
@@ -583,7 +543,6 @@ class WorkerService:
                 shutting_down = self._shutdown_requested
             if shutting_down and command.kind in {
                 WorkerCommandKind.CONNECT,
-                WorkerCommandKind.BOOTSTRAP,
                 WorkerCommandKind.PROBE,
             }:
                 continue
@@ -592,12 +551,6 @@ class WorkerService:
 
             if command.kind is WorkerCommandKind.CONNECT:
                 self._connect(command.config, command.operation_control)
-            elif command.kind is WorkerCommandKind.BOOTSTRAP:
-                self._bootstrap(
-                    command.config,
-                    command.browser_kind,
-                    command.operation_control,
-                )
             elif command.kind is WorkerCommandKind.PROBE:
                 self._probe(command.config, command.operation_control)
             elif command.kind is WorkerCommandKind.RUN:
@@ -658,17 +611,16 @@ class WorkerService:
                 self._session.close()
                 self._session = None
             self._session = self.session_factory(config)
-            self._session.connect(allow_launch=False)
-            connection_info = browser_connection_info_for_cdp(config.cdp_url)
-            if connection_info is not None:
-                self.reporter(
-                    AppEvent(
-                        EventKind.PHASE,
-                        f"已连接 {connection_info.browser.value.title()} 现有 CDP",
-                        RunPhase.CONNECTING,
-                        payload=connection_info,
-                    )
-                )
+            self._session.connect()
+            self.reporter(AppEvent(
+                EventKind.PHASE,
+                "已打开/复用 ego-browser task space",
+                RunPhase.CONNECTING,
+                payload=EgoTaskSpaceInfo(
+                    getattr(self._session, "task_space_id", None),
+                    getattr(self._session, "task_space_name", config.ego_task_space or ""),
+                ),
+            ))
             if operation_control is not None and operation_control.stopped:
                 self._session.close()
                 self._session = None
@@ -689,6 +641,8 @@ class WorkerService:
             else:
                 phase = RunPhase.BLOCKED
                 message = probe.block_reason or "会话不可用"
+                if hasattr(self._session, "preserve_for_handoff"):
+                    self._session.preserve_for_handoff()
             readiness = ReadinessReport.from_member_probe(probe)
             self.reporter(
                 AppEvent(
@@ -759,86 +713,6 @@ class WorkerService:
         finally:
             self._clear_operation(operation_control)
 
-    def _bootstrap(
-        self,
-        config: RunConfig,
-        browser_kind: BrowserKind,
-        operation_control: RunControl | None,
-    ) -> None:
-        try:
-            if operation_control is not None and operation_control.stopped:
-                self._connection_stopped("浏览器启动已停止")
-                return
-            self.reporter(
-                AppEvent(EventKind.PHASE, "正在启动 KKday 调试浏览器", RunPhase.BOOTSTRAPPING)
-            )
-            bootstrapper = self.bootstrapper_factory()
-            if isinstance(bootstrapper, BrowserBootstrapper):
-                bootstrapper.cancelled = lambda: (
-                    operation_control is not None and operation_control.stopped
-                )
-            endpoint = bootstrapper.start(
-                browser_kind, market_homepage(config.market)
-            )
-            if operation_control is not None and operation_control.stopped:
-                self._connection_stopped("浏览器启动已停止")
-                return
-            self.reporter(
-                AppEvent(
-                    EventKind.PHASE,
-                    f"发现 {endpoint.browser.value.title()} 调试 Profile（端口 {endpoint.port}），正在连接",
-                    RunPhase.CONNECTING,
-                    payload=BrowserConnectionInfo(
-                        browser=endpoint.browser,
-                        port=endpoint.port,
-                        profile_dir=endpoint.profile_dir,
-                        owns_process=endpoint.owns_process,
-                    ),
-                )
-            )
-            if self._session is not None:
-                self._session.close()
-            self._session = self.session_factory(config)
-            self._session.connect(allow_launch=False, endpoint=endpoint)
-            if operation_control is not None and operation_control.stopped:
-                self._session.close()
-                self._session = None
-                self._connection_stopped("浏览器连接已停止")
-                return
-            probe = self._session.probe_member(config.market)
-            if operation_control is not None and operation_control.stopped:
-                self._session.close()
-                self._session = None
-                self._connection_stopped("登录态检测已停止")
-                return
-            if probe.member_api_ready and probe.is_login:
-                phase = RunPhase.READY
-                message = "调试浏览器已连接，登录态可用，商品待验证"
-            elif probe.member_api_ready:
-                phase = RunPhase.READY
-                message = "调试浏览器已连接，会员未登录；可继续验证公开商品接口"
-            else:
-                phase = RunPhase.BLOCKED
-                message = probe.block_reason or "KKday 登录态检测失败"
-            self.reporter(
-                AppEvent(
-                    EventKind.READINESS,
-                    message,
-                    phase,
-                    payload=ReadinessReport.from_member_probe(probe),
-                )
-            )
-        except Exception as exc:
-            if self._session is not None:
-                self._session.close()
-                self._session = None
-            if operation_control is not None and operation_control.stopped:
-                self._connection_stopped("浏览器启动已停止")
-            else:
-                self._connection_failure(f"一键启动调试浏览器失败：{exc}")
-        finally:
-            self._clear_operation(operation_control)
-
     def _run(self, command: WorkerCommand) -> None:
         if command.config is None:
             return
@@ -857,13 +731,17 @@ class WorkerService:
             return
         try:
             runner = TaskRunner(self._session)
-            runner.run(
+            result = runner.run(
                 list(command.items),
                 command.config,
                 control,
                 self.reporter,
                 self.checkpoint_factory(command.config),
             )
+            if result.terminal_phase is RunPhase.BLOCKED and hasattr(
+                self._session, "preserve_for_handoff"
+            ):
+                self._session.preserve_for_handoff()
         except Exception as exc:
             self.reporter(
                 AppEvent(

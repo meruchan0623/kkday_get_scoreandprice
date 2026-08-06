@@ -7,23 +7,18 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Sequence
 
-from .browser_bootstrap import BrowserBootstrapper
 from .browser_session import BrowserSession
+from .ego_browser import build_agent_handoff
 from .exporter import RunExporter
 from .inputs import deduplicate_inputs, load_manual_urls, load_txt, load_vendor_excel
 from .models import (
     AppEvent,
-    BrowserKind,
     EventKind,
     RunConfig,
     RunPhase,
     SUPPORTED_MARKETS,
-    market_homepage,
 )
 from .task_runner import RunControl, TaskRunner
-
-
-DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 
 
 class _RunParser(argparse.ArgumentParser):
@@ -31,8 +26,6 @@ class _RunParser(argparse.ArgumentParser):
         parsed = super().parse_args(args, namespace)
         if not parsed.urls and not parsed.inputs:
             self.error("至少需要一个 --url 或 --input")
-        if parsed.launch_browser and parsed.cdp_url != DEFAULT_CDP_URL:
-            self.error("--launch-browser 不能与自定义 --cdp-url 同时使用")
         return parsed
 
 
@@ -57,16 +50,14 @@ def _currency(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = _RunParser(
         prog="kkday_get_scoreandprice.pyw",
-        description="通过已授权的 Chrome/Edge 会话抓取 KKday SKU 价格",
+        description="通过 ego-browser task space 抓取 KKday SKU 价格",
     )
     parser.add_argument("--url", dest="urls", action="append", default=[], help="KKday 商品 URL，可重复")
     parser.add_argument("--input", dest="inputs", action="append", type=Path, default=[], help="TXT 或 XLSX 输入文件，可重复")
     parser.add_argument("--date", dest="usage_date", type=_iso_date, default=date.today() + timedelta(days=1), help="使用日期，默认下一个自然日")
     parser.add_argument("--output", type=Path, default=Path.home() / "Downloads" / "KKday_scraping", help="输出根目录")
     parser.add_argument("--result-dir", type=Path, help="最终结果目录；不会再创建时间戳子目录")
-    parser.add_argument("--cdp-url", default=DEFAULT_CDP_URL, help="现有浏览器 CDP 地址")
-    parser.add_argument("--launch-browser", action="store_true", help="启动或复用 KKday 专用调试浏览器")
-    parser.add_argument("--browser", choices=[kind.value for kind in BrowserKind], default=BrowserKind.AUTO.value, help="配合 --launch-browser 使用")
+    parser.add_argument("--ego-task-space", help="复用的 ego-browser task space 名称；默认按市场生成")
     parser.add_argument("--market", choices=SUPPORTED_MARKETS, default="zh-tw", help="KKday 站点，默认 zh-tw")
     parser.add_argument("--currency", type=_currency, default="TWD", help="期望结果币种，默认 TWD")
     return parser
@@ -110,6 +101,13 @@ def _report(event: AppEvent) -> None:
     _emit(event.kind.value, event.message, **details)
 
 
+def _emit_handoff(event: dict[str, object]) -> None:
+    details = dict(event)
+    kind = str(details.pop("type"))
+    message = str(details.pop("message"))
+    _emit(kind, message, **details)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -122,31 +120,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=args.output.expanduser(),
             market=args.market,
             currency=args.currency,
-            cdp_url=args.cdp_url,
+            ego_task_space=args.ego_task_space,
+            requested_count=len(items),
         )
         exporter = RunExporter(
             config,
             result_dir=args.result_dir.expanduser() if args.result_dir else None,
         )
-        endpoint = None
-        if args.launch_browser:
-            endpoint = BrowserBootstrapper().start(
-                BrowserKind(args.browser), market_homepage(config.market)
-            )
-            _emit(
-                "browser",
-                "调试浏览器已就绪",
-                browser=endpoint.browser.value,
-                port=endpoint.port,
-                profile=str(endpoint.profile_dir),
-            )
-
         session = BrowserSession(config)
         try:
-            session.connect(allow_launch=False, endpoint=endpoint)
+            session.connect()
             probe = session.probe_member(config.market)
             if not probe.member_api_ready:
-                _emit("blocked", probe.block_reason or "KKday 浏览器会话不可用")
+                session.preserve_for_handoff()
+                _emit_handoff(build_agent_handoff(
+                    task_space_id=session.task_space_id,
+                    task_space_name=session.task_space_name,
+                    reason=probe.block_reason or "KKday ego-browser 会话不可用",
+                ))
                 return 3
             if not probe.is_login:
                 _emit("warning", "KKday 会员未登录；继续验证公开商品接口")
@@ -158,8 +149,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _report,
                 exporter.checkpoint,
             )
+            if result.terminal_phase is RunPhase.BLOCKED:
+                if hasattr(session, "preserve_for_handoff"):
+                    session.preserve_for_handoff()
+                failure = result.failures[-1] if result.failures else None
+                _emit_handoff(build_agent_handoff(
+                    task_space_id=getattr(session, "task_space_id", None),
+                    task_space_name=getattr(
+                        session, "task_space_name", config.ego_task_space or f"kkday-sku-price-{config.market}"
+                    ),
+                    reason=failure.message if failure else "KKday 页面需要可见验证",
+                    product_url=failure.url if failure else None,
+                ))
         finally:
             session.close()
+            exporter.close()
 
         failures = sum(len(product.failures) for product in result.products)
         trusted = sum(len(product.trusted_rows) for product in result.products)
