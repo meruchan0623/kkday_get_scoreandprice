@@ -53,6 +53,9 @@ python3 -m kkday_scraper.cli \
 - 页面探测应同时确认 SSR payload 中存在 `option-section` 与 `pkg_oid`。对商品 `528458`（`zh-hk`、HKD、2026-08-15）实测，资源图为 `PRODUCT.prodInfo.packages → PACKAGE.<pkg_oid>.items → ITEM.<item_oid>`；套餐 `1825449/2084045` 对应 item `1571226/1829822`。
 - 兼容实现必须从 SSR payload 解码并按 URL 商品 ID 的 `prodInfo.packages` 过滤套餐，再读取 `PACKAGE.items`；不得从可见价格文案或按钮标签猜测 package/item ID。**DOM/SSR 仅用于资源 ID 与元数据，绝不可作为 SKU 价格来源。** 可信售价只可来自 `fetch-items-data → data[item].item.skus[].single_price.fullday`；日期可售性来自该接口 `calendar/closeList`，并必须与 `fetch-packages-price-calendar → min_price` 的套餐最低价交叉校验。结构漂移或不一致时失败关闭，不能以 DOM 补值。
 - 验收：此商品应输出 HKD、119 个 `trusted` SKU 行、0 failures。项目测试固定使用 `python3 -m pytest -q`；不要用可能解析至用户目录旧包的 `uv run pytest`。
+- **价格日历最低价的语义（2026-08-14 验证）**：`fetch-packages-price-calendar.min_price` 是套餐的全 SKU 展示最低价，可能属于在所选日期被 `fetch-items-data.closeList` 关闭的 SKU。可信售价仍只能取当日可售 SKU 的 `single_price.fullday`；一致性校验应确认 calendar 最低价存在于同套餐服务器 SKU 价格集合中，不能要求其等于可售 SKU 的最低价。若 calendar 最低价不在该价格集合，必须失败关闭。
+- **无可售库存不等于价格错误**：整个套餐在所选日期没有可售 SKU 时，保留不可售业务结果/`no_available_sku`，不要误报 `price_mismatch` 或补造价格。
+- **XLSX 行完整性**：每一条 SKU 行都必须保留 `厂商`、`商品ID`、`URL`、`商品名称`，不得只在同产品首行保留。ID、价格、评分和计数等所有数字字段必须按 Excel 文本写入。
 
 ## 验收
 

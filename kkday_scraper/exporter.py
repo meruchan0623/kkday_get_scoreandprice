@@ -53,8 +53,13 @@ BASE_FIELDS = [
 
 
 def excel_value(value):
+    """Write all scalar numeric business fields as text to preserve identifiers and prices."""
     if isinstance(value, Decimal):
-        return int(value) if value == value.to_integral_value() else float(value)
+        return format(value, "f")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return str(value)
     if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")):
         return "'" + value
     return value
@@ -200,12 +205,12 @@ class RunExporter:
         sku_sheet.title = "抓取结果"
         sku_sheet.append(BASE_FIELDS)
         for product, group in product_rows:
-            for index, row in enumerate(group):
+            for row in group:
                 sku_sheet.append(
                     self._row_values(
                         row,
                         product.snapshot,
-                        include_product_fields=index == 0,
+                        include_product_fields=True,
                     )
                 )
 

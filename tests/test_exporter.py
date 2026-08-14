@@ -90,16 +90,16 @@ def test_checkpoint_writes_stable_workbook_and_failure_ledger(
         "评论数",
     ]
     assert sheet["F2"].value == "日本"
-    assert sheet["G2"].value == 4.75
-    assert sheet["H2"].value == 241
-    assert sheet["I2"].value == 2112
-    assert sheet["J2"].value == 2061
-    assert sheet["K2"].value == 55
+    assert sheet["G2"].value == "4.75"
+    assert sheet["H2"].value == "241"
+    assert sheet["I2"].value == "2112"
+    assert sheet["J2"].value == "2061"
+    assert sheet["K2"].value == "55"
     assert sheet["L2"].value == "立即确认"
     assert sheet["M2"].value == "不可取消"
     assert sheet["N2"].value == "日本当地信号 | iPhone XR 以上设备"
     assert sheet["V2"].value == "zh-tw"
-    assert sheet["W2"].value == 711
+    assert sheet["W2"].value == "711"
     assert exporter.summary_path.exists()
     assert exporter.failures_path.exists()
 
@@ -246,7 +246,7 @@ def test_remote_text_cannot_become_an_excel_formula(tmp_path: Path) -> None:
     assert workbook["抓取结果"]["P2"].value.startswith("'@")
 
 
-def test_checkpoint_sorts_tree_order_and_keeps_product_fields_on_first_row_only(
+def test_checkpoint_sorts_tree_order_and_keeps_identity_on_every_sku_row(
     tmp_path: Path,
 ) -> None:
     product = make_product()
@@ -261,12 +261,17 @@ def test_checkpoint_sorts_tree_order_and_keeps_product_fields_on_first_row_only(
 
     sheet = openpyxl.load_workbook(output, data_only=True)["抓取结果"]
     assert [sheet["R2"].value, sheet["R3"].value] == ["first", "later"]
-    assert sheet["A2"].value == "TSIM 網址"
-    assert sheet["E2"].value == "日本 eSIM"
-    assert sheet["F2"].value == "日本"
-    assert sheet["A3"].value is None
-    assert sheet["E3"].value is None
-    assert sheet["F3"].value is None
+    for cell, want in {
+        "A2": "TSIM 網址",
+        "C2": "149025",
+        "D2": "https://www.kkday.com/zh-tw/product/149025-example",
+        "E2": "日本 eSIM",
+        "A3": "TSIM 網址",
+        "C3": "149025",
+        "D3": "https://www.kkday.com/zh-tw/product/149025-example",
+        "E3": "日本 eSIM",
+    }.items():
+        assert sheet[cell].value == want
 
 
 def test_partial_checkpoint_has_explicit_name_and_covers_zero_sku_url(tmp_path: Path) -> None:

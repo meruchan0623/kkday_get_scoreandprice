@@ -173,12 +173,24 @@ def validate_package_minimum(
     if missing:
         return False, f"{len(missing)} 个可售 SKU 缺少价格"
 
-    prices = [row.sale_price for row in available if row.sale_price is not None]
-    if not prices:
-        return expected_minimum is None, "套餐没有可售 SKU"
-    actual = min(prices)
+    available_prices = [row.sale_price for row in available if row.sale_price is not None]
+    if not available_prices:
+        # Nothing is purchasable on the requested date. This is an availability
+        # outcome (already carried by the SKU rows), not a price inconsistency:
+        # there is no sellable price to compare and no value to synthesize.
+        return True, "套餐没有可售 SKU"
     if expected_minimum is None:
-        return False, f"价格日历缺少套餐最低价，SKU 最低价为 {actual}"
-    if actual != expected_minimum:
-        return False, f"SKU 最低价 {actual} 与价格日历最低价 {expected_minimum} 不一致"
+        return False, f"价格日历缺少套餐最低价，可售 SKU 最低价为 {min(available_prices)}"
+
+    # KKday's package calendar reports the package-wide display floor. That
+    # floor can belong to a SKU closed for the selected date (closeList), while
+    # fetch-items-data correctly exposes a higher minimum among sellable SKUs.
+    # Cross-check that the calendar's floor exists in the server-supplied SKU
+    # price set, but never downgrade/replace the actual sellable SKU prices.
+    all_prices = [row.sale_price for row in rows if row.sale_price is not None]
+    if expected_minimum not in all_prices:
+        return (
+            False,
+            f"价格日历最低价 {expected_minimum} 不存在于套餐 SKU 价格集合（可售最低价 {min(available_prices)}）",
+        )
     return True, ""

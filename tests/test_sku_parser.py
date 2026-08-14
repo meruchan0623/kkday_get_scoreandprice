@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -174,3 +175,55 @@ def test_unknown_dynamic_price_schema_fails_closed() -> None:
             usage_date=date(2026, 7, 22),
             currency="KRW",
         )
+
+
+def test_package_calendar_floor_may_belong_to_closed_sku() -> None:
+    rows = parse_item_payload(
+        payload=load_fixture("items_data_476215.json"),
+        input_item=InputItem(url="https://www.kkday.com/zh-tw/product/149025-example"),
+        product_id="149025",
+        product_name="日本 eSIM",
+        package=PackageRef("476215", "每日/无限流量", ("221992",)),
+        item_id="221992",
+        usage_date=date(2026, 7, 22),
+        currency="KRW",
+    )
+    # The package calendar can expose a lowest display floor for a SKU whose
+    # closeList excludes it on the selected date. The trusted sellable price
+    # must remain the API single_price of the available SKU.
+    rows = [
+        replace(rows[0], available=False, sale_price=Decimal("4")),
+        replace(rows[1], available=True, sale_price=Decimal("13")),
+    ]
+    assert validate_package_minimum(rows, Decimal("4")) == (True, "")
+
+
+def test_package_calendar_floor_absent_from_sku_prices_fails_closed() -> None:
+    rows = parse_item_payload(
+        payload=load_fixture("items_data_476215.json"),
+        input_item=InputItem(url="https://www.kkday.com/zh-tw/product/149025-example"),
+        product_id="149025",
+        product_name="日本 eSIM",
+        package=PackageRef("476215", "每日/无限流量", ("221992",)),
+        item_id="221992",
+        usage_date=date(2026, 7, 22),
+        currency="KRW",
+    )
+    valid, reason = validate_package_minimum(rows, Decimal("999999"))
+    assert valid is False
+    assert "不存在于套餐 SKU 价格集合" in reason
+
+
+def test_package_without_sellable_sku_is_not_a_price_mismatch() -> None:
+    rows = parse_item_payload(
+        payload=load_fixture("items_data_476215.json"),
+        input_item=InputItem(url="https://www.kkday.com/zh-tw/product/149025-example"),
+        product_id="149025",
+        product_name="日本 eSIM",
+        package=PackageRef("476215", "每日/无限流量", ("221992",)),
+        item_id="221992",
+        usage_date=date(2026, 7, 22),
+        currency="KRW",
+    )
+    unavailable = [replace(row, available=False) for row in rows]
+    assert validate_package_minimum(unavailable, Decimal("4")) == (True, "套餐没有可售 SKU")
