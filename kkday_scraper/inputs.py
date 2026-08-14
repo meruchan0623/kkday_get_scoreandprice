@@ -8,7 +8,7 @@ from zipfile import BadZipFile, ZipFile
 
 import openpyxl
 
-from .models import InputItem
+from .models import InputItem, SUPPORTED_MARKETS
 
 
 MAX_INPUT_FILE_BYTES = 5 * 1024 * 1024
@@ -20,13 +20,22 @@ MAX_XLSX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 MAX_XLSX_ARCHIVE_ENTRIES = 1_000
 
 PRODUCT_PATH_RE = re.compile(
-    r"^/[a-z]{2}-[a-z]{2}/product/(\d+)(?:-|$|/)", re.IGNORECASE
+    r"^/([a-z]{2}-[a-z]{2})/product/(\d+)(?:-|$|/)", re.IGNORECASE
 )
 
 
 def extract_product_id_from_url(raw: str) -> str | None:
     match = PRODUCT_PATH_RE.search(urlsplit(raw.strip()).path)
-    return match.group(1) if match else None
+    return match.group(2) if match else None
+
+
+def market_from_url(raw: str) -> str | None:
+    """Return the KKday market segment (e.g. 'zh-hk') in the URL path, if any."""
+    match = PRODUCT_PATH_RE.search(urlsplit(raw.strip()).path)
+    if not match:
+        return None
+    market = match.group(1).lower()
+    return market if market in SUPPORTED_MARKETS else None
 
 
 def _check_file_size(path: Path) -> None:
@@ -81,7 +90,13 @@ def load_manual_urls(raw: str, start_order: int = 0) -> list[InputItem]:
             raise ValueError(f"输入行数超过限制（最多 {MAX_INPUT_ROWS} 行）")
         if not line.strip():
             continue
-        items.append(InputItem(url=normalize_product_url(line), input_order=start_order + len(items)))
+        items.append(
+            InputItem(
+                url=normalize_product_url(line),
+                input_order=start_order + len(items),
+                market=market_from_url(line),
+            )
+        )
     return items
 
 
@@ -100,6 +115,7 @@ def load_txt(path: Path, start_order: int = 0) -> list[InputItem]:
                     input_order=start_order + len(items),
                     source_path=path,
                     source_row=row_number,
+                    market=market_from_url(line),
                 )
             )
     return items
@@ -153,6 +169,7 @@ def load_vendor_excel(path: Path, start_order: int = 0) -> tuple[list[InputItem]
                         source_path=path,
                         source_row=row_index,
                         source_column=column_index,
+                        market=market_from_url(text),
                     )
                 )
         return items, warnings

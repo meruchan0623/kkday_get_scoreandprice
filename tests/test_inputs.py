@@ -9,6 +9,7 @@ from kkday_scraper.inputs import (
     load_manual_urls,
     load_txt,
     load_vendor_excel,
+    market_from_url,
     normalize_product_url,
 )
 
@@ -44,6 +45,20 @@ def test_normalize_product_url_drops_query_tokens_and_fragments() -> None:
     raw = f"{URL_A}?previewToken=secret&utm_source=test#package"
 
     assert normalize_product_url(raw) == URL_A
+
+
+def test_market_from_url_returns_the_url_market_segment() -> None:
+    assert market_from_url("https://www.kkday.com/zh-hk/product/149025-example") == "zh-hk"
+    assert market_from_url("https://www.kkday.com/zh-tw/product/149025-example") == "zh-tw"
+    assert market_from_url("https://www.kkday.com/product/149025-example") is None
+
+
+def test_manual_urls_capture_the_market_from_each_url() -> None:
+    items = load_manual_urls(
+        "https://www.kkday.com/zh-hk/product/149025-example\n"
+        "https://www.kkday.com/zh-tw/product/1982144-example\n"
+    )
+    assert [item.market for item in items] == ["zh-hk", "zh-tw"]
 
 
 def test_manual_and_txt_inputs_preserve_order(tmp_path: Path) -> None:

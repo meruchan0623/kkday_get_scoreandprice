@@ -55,6 +55,14 @@ class BrowserApiClient:
         self.market = market
         self.timeout_ms = timeout_ms
 
+    def set_market(self, market: str) -> None:
+        """Change the market header used by subsequent browser-context fetches.
+
+        Allows a single run to serve products from different KKday markets
+        (e.g. zh-hk and zh-tw) by switching the request header per item.
+        """
+        self.market = market
+
     def get_json(self, path: str) -> dict:
         try:
             raw = self.page.evaluate(

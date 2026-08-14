@@ -39,7 +39,66 @@ from .sku_parser import (
 SNAPSHOT_SCRIPT = r"""
 () => {
   const option = window.__NUXT__ && window.__NUXT__.pinia && window.__NUXT__.pinia["option-section"];
-  if (!option || !option.packages) return null;
+  // KKday's newer Nuxt pages no longer hydrate option-section into window.__NUXT__.
+  // Their SSR payload still has the verified resource graph:
+  // PRODUCT.prodInfo.packages -> PACKAGE.<pkg_oid>.items -> ITEM.<item_oid>.
+  // Decode only that graph; never infer package/item IDs from visible labels.
+  if (!option || !option.packages) {
+    const payloadText = Array.from(document.scripts)
+      .map(node => node.textContent || "")
+      .find(text => text.includes('"option-section"') && text.includes('"pkg_oid"'));
+    if (!payloadText) return null;
+    let encoded;
+    try { encoded = JSON.parse(payloadText); } catch (_) { return null; }
+    const memo = new Map();
+    const resolve = (index) => {
+      if (typeof index !== "number") return index;
+      if (memo.has(index)) return memo.get(index);
+      const value = encoded[index];
+      if (!Array.isArray(value) && (!value || typeof value !== "object")) return value;
+      if (Array.isArray(value) && ["Reactive", "ShallowReactive", "Ref", "EmptyRef"].includes(value[0])) {
+        return resolve(value[1]);
+      }
+      const output = Array.isArray(value) ? [] : {};
+      memo.set(index, output);
+      for (const [key, child] of Object.entries(value)) output[key] = resolve(child);
+      return output;
+    };
+    const root = resolve(0);
+    const match = location.pathname.match(/\/product\/(\d+)/);
+    const productId = String((match && match[1]) || "");
+    const packageIds = new Set();
+    const packageById = new Map();
+    const visited = new Set();
+    const walk = (value) => {
+      if (!value || typeof value !== "object" || visited.has(value)) return;
+      visited.add(value);
+      if (value.prodInfo && String(value.prodInfo.prod_mid || "") === productId) {
+        for (const id of value.prodInfo.packages || []) packageIds.add(String(id));
+      }
+      if (value.pkg_oid != null && Array.isArray(value.items)) {
+        packageById.set(String(value.pkg_oid), value);
+      }
+      for (const child of Object.values(value)) walk(child);
+    };
+    walk(root);
+    const packages = Array.from(packageIds)
+      .map(id => packageById.get(id))
+      .filter(Boolean)
+      .map(pkg => ({
+        packageId: String(pkg.pkg_oid),
+        name: String(pkg.name || ""),
+        itemIds: (pkg.items || []).map(item => String(item)),
+        description: ""
+      }));
+    if (!productId || !packages.length) return null;
+    const title = (document.querySelector("h1") && document.querySelector("h1").textContent.trim()) || document.title;
+    return {
+      productId, url: location.href, name: String(title || ""), destination: "",
+      rating: null, reviewCount: null, soldCount: null, wishlistCount: null,
+      pageMinPrice: null, confirmation: "", cancellationPolicy: "", features: [], packages
+    };
+  }
   const productStore = window.__NUXT__.pinia.product && window.__NUXT__.pinia.product.product;
   const product = (productStore && productStore.prodInfo) || option.product || option.prodInfo || {};
   const packageIds = Array.from(product.packages || option.product?.packages || []);
@@ -106,7 +165,13 @@ PAGE_DIAGNOSTIC_SCRIPT = r"""
     url: location.href,
     readyState: document.readyState,
     challenge: /datadome|captcha|verify you are human|access denied|存取遭拒|安全驗證|安全验证|機器人驗證|机器人验证/.test(text),
-    hasNuxtPackages: Boolean(window.__NUXT__?.pinia?.["option-section"]?.packages)
+    hasNuxtPackages: Boolean(
+      window.__NUXT__?.pinia?.["option-section"]?.packages ||
+      Array.from(document.scripts).some(node => {
+        const value = node.textContent || "";
+        return value.includes('"option-section"') && value.includes('"pkg_oid"');
+      })
+    )
   };
 }
 """
@@ -262,7 +327,13 @@ class ProductScraper:
                 timeout=60_000,
             )
             self.page.wait_for_function(
-                "() => Boolean(window.__NUXT__?.pinia?.['option-section']?.packages)",
+                """() => Boolean(
+                    window.__NUXT__?.pinia?.['option-section']?.packages ||
+                    Array.from(document.scripts).some(node => {
+                        const value = node.textContent || '';
+                        return value.includes('option-section') && value.includes('pkg_oid');
+                    })
+                )""",
                 timeout=45_000,
             )
             snapshot = extract_product_snapshot(self.page, input_item.url)
@@ -471,6 +542,7 @@ class ProductScraper:
                             item_id=item_id,
                             usage_date=config.usage_date,
                             currency=probe.currency,
+                            market=input_item.market or config.market,
                             package_order=package_index,
                             item_order=item_index,
                         )

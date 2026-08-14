@@ -38,6 +38,7 @@ def make_product() -> ProductResult:
         options=("500MB/日", "1 日"),
         available=True,
         currency="KRW",
+        market="zh-tw",
         sale_price=Decimal("711"),
         official_price=None,
         price_source="single_price.fullday",
@@ -97,7 +98,8 @@ def test_checkpoint_writes_stable_workbook_and_failure_ledger(
     assert sheet["L2"].value == "立即确认"
     assert sheet["M2"].value == "不可取消"
     assert sheet["N2"].value == "日本当地信号 | iPhone XR 以上设备"
-    assert sheet["V2"].value == 711
+    assert sheet["V2"].value == "zh-tw"
+    assert sheet["W2"].value == 711
     assert exporter.summary_path.exists()
     assert exporter.failures_path.exists()
 

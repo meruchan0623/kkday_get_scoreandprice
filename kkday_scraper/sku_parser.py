@@ -11,6 +11,12 @@ class SchemaDriftError(ValueError):
     """The response shape is not one whose price semantics we verified."""
 
 
+# First-principles invariant: a SKU price is a server-supplied, date-specific
+# `fetch-items-data.item.skus[].single_price.<event>` value.  Page/DOM prices
+# are display hints only and must never become an exported SKU price.
+TRUSTED_PRICE_ORIGIN = "fetch-items-data:item.skus[].single_price.<event>"
+
+
 def as_decimal(value: Any) -> Decimal | None:
     if value is None or isinstance(value, bool):
         return None
@@ -61,6 +67,7 @@ def parse_item_payload(
     event: str = "fullday",
     package_order: int = 0,
     item_order: int = 0,
+    market: str = "",
 ) -> list[SkuRow]:
     try:
         item_data = payload["data"][str(item_id)]
@@ -151,6 +158,7 @@ def parse_item_payload(
                 price_source=f"single_price.{event}" if sale_price is not None else "",
                 price_status=status,
                 note=note,
+                market=market,
                 tree_order=(package_order, item_order, *tree_position),
             )
         )

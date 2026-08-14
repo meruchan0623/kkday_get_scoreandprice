@@ -176,7 +176,10 @@ class TaskRunner:
                 )
             )
             try:
-                probe = self.session.probe_member(config.market)
+                item_market = item.market or config.market
+                if hasattr(scraper, "api") and hasattr(scraper.api, "set_market"):
+                    scraper.api.set_market(item_market)
+                probe = self.session.probe_member(item_market)
             except Exception as exc:
                 probe_failed = True
                 product = ProductResult(

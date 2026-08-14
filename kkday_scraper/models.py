@@ -70,6 +70,7 @@ class InputItem:
     source_path: Path | None = None
     source_row: int | None = None
     source_column: int | None = None
+    market: str | None = None
 
 
 SUPPORTED_MARKETS = ("zh-tw", "zh-hk")
@@ -189,6 +190,7 @@ class SkuRow:
     price_source: str
     price_status: PriceStatus
     note: str = ""
+    market: str = ""
     captured_at: datetime = field(default_factory=datetime.now)
     tree_order: tuple[int, ...] = ()
 
