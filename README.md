@@ -54,7 +54,31 @@ python3 -m kkday_scraper.cli \
 | `--output DIR` | Downloads 下目录 | 创建独立运行目录 |
 | `--result-dir DIR` | — | 使用精确结果目录并加锁 |
 
+### 多市场单任务合并
+
+单个 CLI 任务可同时传入来自多个 KKday 市场（`zh-hk`、`zh-tw`）的商品 URL。每个 URL 的 market 会从路径自动识别，抓取时逐商品切换浏览器 market 请求头；**所有抓取目标合并进一张「抓取结果」工作表输出**，每个 SKU 行带「市场」列区分，最终交付**同一个原生 `kkday_price_results.xlsx`**，不再按市场拆分多个文件。`--market` 仅作为 URL 缺少 market 段时的回退值；`--currency` 仍为全任务期望币种（浏览器实际服务的币种会按行记录，不伪造）。
+
+```bash
+python3 -m kkday_scraper.cli \
+  --url 'https://www.kkday.com/zh-hk/product/121499-example' \
+  --url 'https://www.kkday.com/zh-tw/product/155669-example' \
+  --date '2026-08-08' \
+  --currency USD \
+  --ego-task-space 'kkday-mixed-market' \
+  --result-dir '/absolute/path/mixed-result'
+```
+
 同一个 task space 同一时间只允许一个批次。所有页面导航、JavaScript 和带登录态的请求都由 ego-browser 完成；Python 不读取登录 Cookie、密码、Token 或浏览器内部连接信息。
+
+### 价格事实来源（不可降级）
+
+SKU 价格不是从页面 DOM、按钮文案或商品卡片最小价读取。页面/SSR 只用于取得商品、套餐与 item ID；每个导出的可信 SKU 行必须同时满足：
+
+1. 售价来自浏览器登录上下文中 `GET /api/_nuxt/product/fetch-items-data` 的 `data[item].item.skus[].single_price.fullday`；
+2. 可售状态来自同一接口的日期 `calendar` / `closeList`；
+3. 该套餐的 SKU 最低售价必须与独立 `GET /api/_nuxt/product/fetch-packages-price-calendar` 的日期 `min_price` 一致。
+
+接口结构缺失、动态价格结构未验证或最低价不一致时，程序失败关闭/标记 partial，绝不以 DOM 显示价补填。
 
 ## 挑战与接管
 
