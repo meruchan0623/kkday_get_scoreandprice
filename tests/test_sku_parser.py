@@ -45,6 +45,30 @@ def test_parser_expands_options_and_excludes_closed_sku_from_available_set() -> 
     assert rows[1].price_status is PriceStatus.TRUSTED
 
 
+def test_parser_ignores_dom_like_display_prices_and_uses_only_api_single_price() -> None:
+    payload = load_fixture("items_data_476215.json")
+    # These resemble values a page snapshot/DOM might expose.  They are not part
+    # of the trusted API schema and must have no influence on the exported SKU.
+    payload["pageMinPrice"] = "1"
+    payload["data"]["221992"]["item"]["displayPrice"] = "1"
+    payload["data"]["221992"]["item"]["domPrice"] = "1"
+
+    rows = parse_item_payload(
+        payload=payload,
+        input_item=InputItem(url="https://www.kkday.com/zh-tw/product/149025-example"),
+        product_id="149025",
+        product_name="日本 eSIM",
+        package=PackageRef("476215", "每日/无限流量", ("221992",)),
+        item_id="221992",
+        usage_date=date(2026, 7, 22),
+        currency="KRW",
+    )
+
+    trusted = [row for row in rows if row.price_status is PriceStatus.TRUSTED]
+    assert [row.sale_price for row in trusted] == [Decimal("711")]
+    assert all(row.price_source == "single_price.fullday" for row in trusted)
+
+
 def test_parser_never_replaces_sale_price_with_official_price() -> None:
     rows = parse_item_payload(
         payload=load_fixture("items_data_1982144.json"),
