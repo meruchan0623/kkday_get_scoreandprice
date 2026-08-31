@@ -53,6 +53,28 @@ def test_market_from_url_returns_the_url_market_segment() -> None:
     assert market_from_url("https://www.kkday.com/product/149025-example") is None
 
 
+def test_marketless_product_url_uses_the_optional_market_fallback() -> None:
+    url = "https://www.kkday.com/product/149025-example"
+
+    assert normalize_product_url(url) == url
+    assert market_from_url(url) is None
+
+
+@pytest.mark.parametrize("market", ["ja-jp", "ja", "zh-cn", "en"])
+def test_market_from_url_supports_requested_non_default_markets(market: str) -> None:
+    url = f"https://www.kkday.com/{market}/product/149025-example"
+
+    assert normalize_product_url(url) == url
+    assert market_from_url(url) == market
+
+
+def test_market_from_url_treats_an_unknown_market_as_an_optional_fallback() -> None:
+    url = "https://www.kkday.com/fr-fr/product/149025-example"
+
+    assert normalize_product_url(url) == url
+    assert market_from_url(url) is None
+
+
 def test_manual_urls_capture_the_market_from_each_url() -> None:
     items = load_manual_urls(
         "https://www.kkday.com/zh-hk/product/149025-example\n"

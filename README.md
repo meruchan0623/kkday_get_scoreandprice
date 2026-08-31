@@ -48,7 +48,7 @@ python3 -m kkday_scraper.cli \
 | `--url URL` | — | 商品 URL，可重复 |
 | `--input PATH` | — | TXT 或 XLSX，可重复 |
 | `--date YYYY-MM-DD` | 明天 | 使用日期 |
-| `--market {zh-tw,zh-hk}` | `zh-tw` | KKday 分站 |
+| `--market {zh-tw,zh-hk,ja-jp,ja,zh-cn,en}` | `zh-tw` | 可选的 URL 无市场段回退站点；含受支持市场段的商品 URL 会自动使用自身市场 |
 | `--currency CODE` | `TWD` | 期望币种；不换算 |
 | `--ego-task-space NAME` | `kkday-sku-price-{market}` | 要复用的 task space |
 | `--output DIR` | Downloads 下目录 | 创建独立运行目录 |
@@ -56,7 +56,7 @@ python3 -m kkday_scraper.cli \
 
 ### 多市场单任务合并
 
-单个 CLI 任务可同时传入来自多个 KKday 市场（`zh-hk`、`zh-tw`）的商品 URL。每个 URL 的 market 会从路径自动识别，抓取时逐商品切换浏览器 market 请求头；**所有抓取目标合并进一张「抓取结果」工作表输出**，每个 SKU 行带「市场」列区分，最终交付**同一个原生 `kkday_price_results.xlsx`**，不再按市场拆分多个文件。`--market` 仅作为 URL 缺少 market 段时的回退值；`--currency` 仍为全任务期望币种（浏览器实际服务的币种会按行记录，不伪造）。
+单个 CLI 任务可同时传入来自多个 KKday 市场（`zh-hk`、`zh-tw`、`ja-jp`、`ja`、`zh-cn`、`en`）的商品 URL。每个 URL 的 market 会从路径自动识别，抓取时逐商品切换浏览器 market 请求头；**所有抓取目标合并进一张「抓取结果」工作表输出**，每个 SKU 行带「市场」列区分，最终交付**同一个原生 `kkday_price_results.xlsx`**，不再按市场拆分多个文件。`--market` 是可选参数，仅作为 URL 缺少受支持市场段或市场段不受支持时的回退值；`--currency` 仍为全任务期望币种（浏览器实际服务的币种会按行记录，不伪造）。
 
 ```bash
 python3 -m kkday_scraper.cli \

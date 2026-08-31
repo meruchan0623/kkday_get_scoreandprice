@@ -20,7 +20,7 @@ MAX_XLSX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 MAX_XLSX_ARCHIVE_ENTRIES = 1_000
 
 PRODUCT_PATH_RE = re.compile(
-    r"^/([a-z]{2}-[a-z]{2})/product/(\d+)(?:-|$|/)", re.IGNORECASE
+    r"^/(?:([a-z]{2}(?:-[a-z]{2})?)/)?product/(\d+)(?:-|$|/)", re.IGNORECASE
 )
 
 
@@ -34,7 +34,10 @@ def market_from_url(raw: str) -> str | None:
     match = PRODUCT_PATH_RE.search(urlsplit(raw.strip()).path)
     if not match:
         return None
-    market = match.group(1).lower()
+    market_segment = match.group(1)
+    if market_segment is None:
+        return None
+    market = market_segment.lower()
     return market if market in SUPPORTED_MARKETS else None
 
 

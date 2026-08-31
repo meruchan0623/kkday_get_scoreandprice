@@ -73,7 +73,7 @@ class InputItem:
     market: str | None = None
 
 
-SUPPORTED_MARKETS = ("zh-tw", "zh-hk")
+SUPPORTED_MARKETS = ("zh-tw", "zh-hk", "ja-jp", "ja", "zh-cn", "en")
 
 
 def market_homepage(market: str) -> str:

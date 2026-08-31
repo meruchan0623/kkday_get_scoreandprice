@@ -84,6 +84,19 @@ def test_cli_allows_currency_to_override_the_twd_default() -> None:
     assert args.currency == "USD"
 
 
+def test_cli_accepts_an_optional_non_default_market_fallback() -> None:
+    args = build_parser().parse_args(
+        [
+            "--url",
+            "https://www.kkday.com/ja-jp/product/149025-example",
+            "--market",
+            "ja-jp",
+        ]
+    )
+
+    assert args.market == "ja-jp"
+
+
 def test_cli_rejects_non_ascii_currency_letters() -> None:
     with pytest.raises(SystemExit) as error:
         build_parser().parse_args(

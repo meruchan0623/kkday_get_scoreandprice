@@ -10,6 +10,7 @@ from kkday_scraper.models import (
     RunPhase,
     SessionProbe,
     SkuRow,
+    market_homepage,
 )
 
 
@@ -86,3 +87,10 @@ def test_member_probe_does_not_claim_business_readiness() -> None:
 
 def test_verifying_is_a_distinct_run_phase() -> None:
     assert RunPhase.VERIFYING.value == "verifying"
+
+
+def test_market_homepage_supports_the_requested_non_default_markets() -> None:
+    assert market_homepage("ja-jp") == "https://www.kkday.com/ja-jp"
+    assert market_homepage("ja") == "https://www.kkday.com/ja"
+    assert market_homepage("zh-cn") == "https://www.kkday.com/zh-cn"
+    assert market_homepage("en") == "https://www.kkday.com/en"

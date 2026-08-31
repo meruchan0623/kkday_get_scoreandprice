@@ -109,6 +109,50 @@ def test_runner_checkpoints_after_each_product(tmp_path: Path) -> None:
     assert events[-1].phase is RunPhase.COMPLETED
 
 
+def test_runner_uses_configured_market_when_input_url_has_no_market(tmp_path: Path) -> None:
+    class RecordingSession(FakeSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.markets: list[str] = []
+
+        def probe_member(self, market: str) -> SessionProbe:
+            self.markets.append(market)
+            return super().probe_member(market)
+
+    class RecordingApi:
+        def __init__(self) -> None:
+            self.markets: list[str] = []
+
+        def set_market(self, market: str) -> None:
+            self.markets.append(market)
+
+    class RecordingScraper(FakeScraper):
+        def __init__(self) -> None:
+            super().__init__()
+            self.api = RecordingApi()
+
+    item = InputItem("https://www.kkday.com/product/149025-example")
+    session = RecordingSession()
+    scraper = RecordingScraper()
+    runner = TaskRunner(
+        session,
+        lambda _page, _config, _continue: scraper,
+        sleep=lambda _seconds: None,
+    )
+
+    result = runner.run(
+        [item],
+        RunConfig(date(2026, 7, 22), tmp_path, market="ja-jp"),
+        RunControl(),
+        lambda _event: None,
+        lambda _products, final: tmp_path / "result.xlsx" if final else None,
+    )
+
+    assert result.terminal_phase is RunPhase.COMPLETED
+    assert session.markets == ["ja-jp"]
+    assert scraper.api.markets == ["ja-jp"]
+
+
 def test_runner_stops_batch_on_session_block_and_keeps_partial_result(
     tmp_path: Path,
 ) -> None:
