@@ -11,6 +11,7 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from time import monotonic
 
 from .exporter import RunExporter
+from .dates import default_usage_date as business_default_usage_date
 from .ego_browser import build_agent_handoff, default_task_space
 from .gui_state import (
     button_policy,
@@ -37,7 +38,9 @@ CLOSE_WAIT_SECONDS = 110.0
 
 
 def default_usage_date(today: date | None = None) -> date:
-    return (today or date.today()) + timedelta(days=1)
+    if today is not None:
+        return today + timedelta(days=1)
+    return business_default_usage_date()
 
 
 class KKdayScraperApp:
@@ -59,7 +62,10 @@ class KKdayScraperApp:
         self.events: queue.Queue[AppEvent] = queue.Queue()
         self.worker = WorkerService(self.events.put, self._checkpoint_factory)
 
+        self._automatic_usage_date = True
+        self._setting_automatic_usage_date = False
         self.date_var = tk.StringVar(value=default_usage_date().isoformat())
+        self.date_var.trace_add("write", self._mark_usage_date_edited)
         self.market_var = tk.StringVar(value="zh-tw")
         self.task_space_var = tk.StringVar(value=default_task_space("zh-tw"))
         self.task_space_id_var = tk.StringVar(value="—")
@@ -252,6 +258,7 @@ class KKdayScraperApp:
         ).pack(side=tk.RIGHT)
 
     def _config(self) -> RunConfig:
+        self._refresh_automatic_usage_date()
         try:
             usage_date = date.fromisoformat(self.date_var.get().strip())
         except ValueError as exc:
@@ -267,6 +274,23 @@ class KKdayScraperApp:
             market=self.market_var.get(),
             ego_task_space=self.task_space_var.get().strip() or None,
         )
+
+    def _mark_usage_date_edited(self, *_args: object) -> None:
+        if not self._setting_automatic_usage_date:
+            self._automatic_usage_date = False
+
+    def _refresh_automatic_usage_date(self) -> None:
+        """Roll an untouched GUI default forward when the business day changes."""
+        if not getattr(self, "_automatic_usage_date", False):
+            return
+        fresh_value = default_usage_date().isoformat()
+        if self.date_var.get().strip() == fresh_value:
+            return
+        self._setting_automatic_usage_date = True
+        try:
+            self.date_var.set(fresh_value)
+        finally:
+            self._setting_automatic_usage_date = False
 
     def _checkpoint_factory(self, config: RunConfig):
         return RunExporter(config).checkpoint

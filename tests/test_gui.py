@@ -107,3 +107,27 @@ def test_config_accepts_zh_hk_market(tmp_path) -> None:
 
     assert app._config().market == "zh-hk"
     assert app._config().ego_task_space == "kkday-hk"
+
+
+def test_gui_rolls_an_untouched_automatic_default_forward(monkeypatch) -> None:
+    monkeypatch.setattr(gui_module, "default_usage_date", lambda: date(2026, 9, 1))
+    app = KKdayScraperApp.__new__(KKdayScraperApp)
+    app.date_var = FakeVar("2026-08-31")
+    app._automatic_usage_date = True
+    app._setting_automatic_usage_date = False
+
+    app._refresh_automatic_usage_date()
+
+    assert app.date_var.get() == "2026-09-01"
+
+
+def test_gui_preserves_a_user_selected_date(monkeypatch) -> None:
+    monkeypatch.setattr(gui_module, "default_usage_date", lambda: date(2026, 9, 1))
+    app = KKdayScraperApp.__new__(KKdayScraperApp)
+    app.date_var = FakeVar("2026-08-31")
+    app._automatic_usage_date = False
+    app._setting_automatic_usage_date = False
+
+    app._refresh_automatic_usage_date()
+
+    assert app.date_var.get() == "2026-08-31"

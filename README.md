@@ -47,7 +47,7 @@ python3 -m kkday_scraper.cli \
 |---|---|---|
 | `--url URL` | — | 商品 URL，可重复 |
 | `--input PATH` | — | TXT 或 XLSX，可重复 |
-| `--date YYYY-MM-DD` | 明天 | 使用日期 |
+| `--date YYYY-MM-DD` | Asia/Shanghai 的下一个自然日 | 使用日期；推荐业务任务显式传入以便重跑可复现 |
 | `--market {zh-tw,zh-hk,ja-jp,ja,zh-cn,en}` | `zh-tw` | 可选的 URL 无市场段回退站点；含受支持市场段的商品 URL 会自动使用自身市场 |
 | `--currency CODE` | `TWD` | 期望币种；不换算 |
 | `--ego-task-space NAME` | `kkday-sku-price-{market}` | 要复用的 task space |

@@ -3,11 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import date, timedelta
 from pathlib import Path
 from typing import Sequence
 
 from .browser_session import BrowserSession
+from .dates import resolve_usage_date
 from .ego_browser import build_agent_handoff
 from .exporter import RunExporter
 from .inputs import deduplicate_inputs, load_manual_urls, load_txt, load_vendor_excel
@@ -31,13 +31,6 @@ class _RunParser(argparse.ArgumentParser):
         return parsed
 
 
-def _iso_date(value: str) -> date:
-    try:
-        return date.fromisoformat(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("日期必须是 YYYY-MM-DD") from exc
-
-
 def _currency(value: str) -> str:
     normalized = value.strip().upper()
     if (
@@ -56,7 +49,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--url", dest="urls", action="append", default=[], help="KKday 商品 URL，可重复")
     parser.add_argument("--input", dest="inputs", action="append", type=Path, default=[], help="TXT 或 XLSX 输入文件，可重复")
-    parser.add_argument("--date", dest="usage_date", type=_iso_date, default=date.today() + timedelta(days=1), help="使用日期，默认下一个自然日")
+    parser.add_argument(
+        "--date",
+        dest="usage_date",
+        metavar="YYYY-MM-DD",
+        help="使用日期；省略时在任务实际启动时按 Asia/Shanghai 取下一个自然日",
+    )
     parser.add_argument("--output", type=Path, default=Path.home() / "Downloads" / "KKday_scraping", help="输出根目录")
     parser.add_argument("--result-dir", type=Path, help="最终结果目录；不会再创建时间戳子目录")
     parser.add_argument("--ego-task-space", help="复用的 ego-browser task space 名称；默认按市场生成")
@@ -147,7 +145,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not items:
             raise ValueError("输入中没有有效的 KKday 商品 URL")
         config = RunConfig(
-            usage_date=args.usage_date,
+            usage_date=resolve_usage_date(args.usage_date),
             output_dir=args.output.expanduser(),
             market=args.market,
             currency=args.currency,

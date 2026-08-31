@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -37,7 +37,7 @@ def test_cli_accepts_a_complete_codex_driven_run(tmp_path: Path) -> None:
     assert args.urls == [
         "https://www.kkday.com/zh-tw/product/149025-example"
     ]
-    assert args.usage_date == date(2026, 7, 22)
+    assert args.usage_date == "2026-07-22"
     assert args.output == tmp_path
     assert args.ego_task_space == "kkday-20-products"
     assert args.market == "zh-hk"
@@ -58,12 +58,12 @@ def test_cli_accepts_an_exact_result_directory(tmp_path: Path) -> None:
     assert args.result_dir == result_dir
 
 
-def test_cli_defaults_to_next_calendar_day_taiwan_and_twd() -> None:
+def test_cli_defers_default_usage_date_until_the_run_starts() -> None:
     args = build_parser().parse_args(
         ["--url", "https://www.kkday.com/zh-tw/product/149025-example"]
     )
 
-    assert args.usage_date == date.today() + timedelta(days=1)
+    assert args.usage_date is None
     assert args.market == "zh-tw"
     assert args.currency == "TWD"
 
