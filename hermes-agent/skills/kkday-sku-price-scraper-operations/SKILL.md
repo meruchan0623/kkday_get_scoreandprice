@@ -57,6 +57,13 @@ python3 -m kkday_scraper.cli \
 - **无可售库存不等于价格错误**：整个套餐在所选日期没有可售 SKU 时，保留不可售业务结果/`no_available_sku`，不要误报 `price_mismatch` 或补造价格。
 - **XLSX 行完整性**：每一条 SKU 行都必须保留 `厂商`、`商品ID`、`URL`、`商品名称`，不得只在同产品首行保留。ID、价格、评分和计数等所有数字字段必须按 Excel 文本写入。
 
+## 币种门禁（2026-09-22 复核）
+
+- 浏览器会员会话的实际结算币种由账号会话决定，不由 URL、`--market` 或偏好 cookie 决定。本机 ego-browser 会话当前实际返回 **HKD**。
+- `--currency` 与探针返回币种不一致时，CLI 对每个商品写入 `currency_mismatch` 并以退出码 `4` 失败关闭。这是预期保护，不要绕过。
+- 用户未指定币种、且 URL 为 `zh-tw` 时，若以默认 `TWD` 跑 canary 即得 `currency_mismatch`，应改以实际币种（HKD）重跑，并在交付说明中明确标注 HKD；**绝不可把 HKD 行标记为 TWD**。
+- `~/Documents/KKdayScraper/preference_cookies.json` 不存在时，偏好 cookie 不参与币种决策；不要靠写该文件切换币种。
+
 ## 验收
 
 - `0`：只有 requested=processed、failures=0、最终 XLSX 可读、摘要 final、无失败文件时才宣布完整成功；
