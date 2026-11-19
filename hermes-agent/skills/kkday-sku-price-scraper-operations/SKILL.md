@@ -15,7 +15,18 @@ description: 使用系统 Python 和 ego-browser task space 运行、恢复、�
 - 不规避 CAPTCHA/DataDome/MFA，不创建替代浏览器空间，不循环重试。
 - 同一 task space 同时只允许一个批次。
 
+## 固定抓取目标：Google Sheets 的 KKday 页签
+
+- 用户指定的固定抓取表为 `https://docs.google.com/spreadsheets/d/1yTsSBTwLQN_dLKq08xpD1Set0sw9WptfQcewnkaA-cc/edit`。同一工作簿按平台分为 `Trip` 与 `KKday` 两个页签；KKday 固定入口为 `https://docs.google.com/spreadsheets/d/1yTsSBTwLQN_dLKq08xpD1Set0sw9WptfQcewnkaA-cc/edit?gid=1948158253#gid=1948158253`。
+- KKday 任务只读 `KKday`（`gid=1948158253`），不得使用 `Trip`（`gid=0`）或未经校验的默认/活动工作表。可直接 HTTP 导出 `https://docs.google.com/spreadsheets/d/1yTsSBTwLQN_dLKq08xpD1Set0sw9WptfQcewnkaA-cc/export?format=xlsx&gid=1948158253`，验证页签及表头后生成 CLI 输入，无需为读表启动浏览器。
+- 表头为 `eSIM | FR | USIMSA | JY | 富爾特 | TGT | TSIM`：`eSIM` 是目的地/区域分类，不是厂商或抓取 URL；其余六列为厂商，非空单元格为商品完整 URL。保留原 URL 的语言路径和 slug，从 `/product/<完整数字ID>` 提取商品 ID；空格/空单元格跳过，非空但非合法 KKday 商品链接须显式报错，不能静默漏抓。
+- 保留每条输入的原行号、目的地、厂商、URL、商品ID。相同市场/币种下可按完整商品ID去重抓取，但必须保留并回填全部原始对应关系；同一商品可能出现在多个目的地行，不能把去重数当作表内目标格数，也不能丢掉第二处归属。
+- 新批次先读取在线最新表，冻结本批次输入与来源（工作簿ID、页签名、gid、获取时间、文件哈希），再执行 canary/批量。断点恢复使用该批次冻结输入，不能重下在线表覆盖已有任务证据。在线读取失败时明确阻塞，不默用过期缓存；商品数量每批次动态核对，不写死历史统计。
+- 用户说“KKday 固定抓取表/默认抓取目标/第二个页签”默认指此 `KKday` 页签；它与 Trip 抓取目标分开，不能覆盖 Trip 本地镜像或更改 Trip 定时任务。本规则只固化输入来源，不代表已创建 KKday 定时抓取任务。
+
 ## 运行前
+
+日常参数直接使用 [`references/cli-quick-reference.md`](references/cli-quick-reference.md)。该页列出 `--date`、受支持市场、`--output` 与 `--result-dir` 的准确差异、单/多市场可复制命令，以及 2026-08-21 至 2026-10-21 的 `--help` 审计证据。只有源码/README 与该速查冲突或 CLI 报未知参数时才重新查询帮助。
 
 ```bash
 python3 --version
