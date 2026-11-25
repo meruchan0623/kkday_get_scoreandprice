@@ -14,6 +14,12 @@ description: 使用系统 Python 和 ego-browser task space 运行、恢复、�
 - 不读取、输出或迁移 Cookie、密码、Token、验证码、会员标识和浏览器内部连接信息。
 - 不规避 CAPTCHA/DataDome/MFA，不创建替代浏览器空间，不循环重试。
 - 同一 task space 同时只允许一个批次。
+- 任何登录/会话/401/OTP 处理先读 `~/.hermes/KKDAY_AUTH_GUIDE.md`；禁止按旧挑战恢复段打开 SCM 浏览器登录页或复制 cookie。公开商品可在游客上下文读取已验证商品接口，但这不证明 SCM 已登录。
+- ego-browser v2.2.1 的 `page.evaluate` 若首参是表达式字符串，只接受单个参数；带业务参数时先用 JSON 序列化构造自调用表达式字符串。不要把 `page.evaluate(source, argument)` 的 fake-runner 测试通过当成真实兼容。
+- 延迟加载页面可能有 `option-section` 却没有序列化的 `"pkg_oid"`；不得用缺少 pkg_oid 判定商品无套餐。检查真实商品资源图、经实际网络观察的套餐元数据接口和完整商品 ID 归属。只凭模拟 Nuxt fixture 或字符串断言通过，不能认定抓价修复成功；必须独立重跑原始 URL 并验证非零可信 SKU 及最终 XLSX。
+- 连续修正后真实 canary 仍为 schema/0 trusted rows 时，保留失败证据并标明修复未完成；不要继续盲改、把测试通过当交付成功或发送空价格表冒充成果。
+
+- 对首屏无套餐的商品，在同一次 ego-browser 调用内安装响应观察、打开原 URL 并等待正常 GET `fetch-packages-data` 返回。核对请求 `prodMid`、响应 `data['PRODUCT-SETTING'].prod_mid`、`PACKAGE` 与 `ITEM` 的逐级 ID；此响应仅证明套餐归属，不直接取价。不得因首屏出现 `option-section` 就提前结束等待。按日期在 SKU 接口与价格日历完成核验后，逐产品回读原生 XLSX。
 
 ## 固定抓取目标：Google Sheets 的 KKday 页签
 
