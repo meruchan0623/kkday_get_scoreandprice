@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 from datetime import date
 from pathlib import Path
 
@@ -16,6 +18,7 @@ from kkday_scraper.product_scraper import (
     NoPackagesError,
     PAGE_DIAGNOSTIC_SCRIPT,
     ProductScraper,
+    SNAPSHOT_SCRIPT,
     extract_product_snapshot,
 )
 from kkday_scraper.sku_parser import SchemaDriftError
@@ -49,6 +52,7 @@ class FakeApi:
     def __init__(self) -> None:
         self.calendar_calls: list[str] = []
         self.item_calls: list[str] = []
+        self.packages_calls: list[str] = []
 
     def fetch_package_calendar(self, product_id, _begin, _end) -> dict:
         self.calendar_calls.append(product_id)
@@ -62,6 +66,40 @@ class FakeApi:
             else "items_data_1982144.json"
         )
         return load_fixture(name)
+
+    def fetch_packages_data(self, _product_id, _begin, _end) -> dict:
+        self.packages_calls.append(_product_id)
+        return {
+            "message": "success",
+            "data": {"PRODUCT-SETTING": {"prod_mid": _product_id}, "PACKAGE": {}, "ITEM": {}},
+        }
+
+
+class NoSsrPassiveGraphPage:
+    """Models the host path: no SSR at all, normal-load graph retained in JS."""
+
+    def __init__(self, graph: dict) -> None:
+        self.url = graph["url"]
+        self.graph = graph
+        self.armed: list[str] = []
+        self.wait_expressions: list[str] = []
+
+    def arm_passive_package_graph(self, url: str) -> None:
+        self.armed.append(url)
+
+    def goto(self, url: str, **_kwargs) -> None:
+        self.url = url
+
+    def wait_for_function(self, expression: str, **_kwargs) -> None:
+        self.wait_expressions.append(expression)
+
+    def evaluate(self, expression: str) -> dict | None:
+        if expression == SNAPSHOT_SCRIPT:
+            return None
+        raise AssertionError("unexpected diagnostic evaluation")
+
+    def read_passive_package_graph(self) -> dict:
+        return self.graph
 
 
 def probe(page: FakePage) -> SessionProbe:
@@ -136,6 +174,151 @@ def test_snapshot_distinguishes_an_empty_package_business_state() -> None:
         extract_product_snapshot(FakePage(raw), raw["url"])
 
 
+def test_snapshot_uses_packages_data_when_ssr_has_product_ids_only() -> None:
+    raw = load_fixture("product_snapshot_149025.json")
+    raw["packages"] = []
+    raw["packageIds"] = ["476215", "1982144"]
+    metadata = {
+        "PRODUCT-SETTING": {"prod_mid": 149025},
+        "PACKAGE": {
+            "476215": {"pkg_oid": 476215, "name": "first", "items": [221992]},
+            "1982144": {"pkg_oid": 1982144, "name": "second", "items": [451271]},
+        },
+        "ITEM": {"221992": {"item_oid": 221992}, "451271": {"item_oid": 451271}},
+    }
+
+    snapshot = extract_product_snapshot(
+        FakePage(raw), raw["url"], package_data=metadata
+    )
+
+    assert [package.package_id for package in snapshot.packages] == [
+        "476215",
+        "1982144",
+    ]
+    assert snapshot.packages[1].item_ids == ("451271",)
+
+
+def test_snapshot_uses_only_the_verified_product_package_graph() -> None:
+    raw = {
+        "url": "https://www.kkday.com/zh-tw/product/135034",
+        "productId": "135034",
+        "name": "",
+        "packages": [],
+        "packageIds": ["900001", "900002"],
+    }
+    metadata = load_fixture("packages_data_graph_135034.json")
+
+    snapshot = extract_product_snapshot(FakePage(raw), raw["url"], metadata)
+
+    assert [package.package_id for package in snapshot.packages] == ["900001", "900002"]
+
+
+def test_scrape_uses_passive_normal_load_graph_when_ssr_is_absent(tmp_path: Path) -> None:
+    graph = {
+        "url": "https://www.kkday.com/zh-tw/product/149025",
+        "productId": "149025",
+        "name": "Actual H1 title",
+        "packages": [
+            {"packageId": "476215", "name": "first", "itemIds": ["221992"], "description": ""},
+            {"packageId": "1982144", "name": "second", "itemIds": ["1727921"], "description": ""},
+        ],
+    }
+    page = NoSsrPassiveGraphPage(graph)
+    api = FakeApi()
+
+    result = ProductScraper(page, api, sleep=lambda _seconds: None, uniform=lambda low, _high: low).scrape(
+        InputItem(url=page.url), probe(page), RunConfig(date(2026, 7, 22), tmp_path)
+    )
+
+    assert result.failures == ()
+    assert result.snapshot is not None
+    assert result.snapshot.name == "Actual H1 title"
+    assert page.armed == [page.url]
+    assert page.wait_expressions == []
+    assert api.packages_calls == []
+    assert api.item_calls == ["476215", "1982144"]
+
+
+def test_snapshot_rejects_mismatched_item_resource_in_package_graph() -> None:
+    raw = load_fixture("product_snapshot_149025.json")
+    raw["packages"] = []
+    raw["packageIds"] = ["476215"]
+    metadata = {
+        "PRODUCT-SETTING": {"prod_mid": 149025},
+        "PACKAGE": {"476215": {"pkg_oid": 476215, "items": [221992]}},
+        "ITEM": {"221992": {"item_oid": 999}},
+    }
+
+    with pytest.raises(SchemaDriftError, match="item ID"):
+        extract_product_snapshot(FakePage(raw), raw["url"], metadata)
+
+
+def test_ssr_decoder_allows_empty_packages_for_resource_metadata_fallback() -> None:
+    assert "if (!productId || !packages.length) return null" not in SNAPSHOT_SCRIPT
+    assert "if (!productId || !hasMatchingProductResource) return null" in SNAPSHOT_SCRIPT
+
+
+def test_snapshot_script_accepts_deferred_packages_from_a_matching_nuxt_product() -> None:
+    """Exercise the browser JavaScript, not a pre-decoded FakePage snapshot."""
+    encoded = (FIXTURES / "nuxt_ssr_deferred_packages.json").read_text(
+        encoding="utf-8"
+    )
+    runner = """
+const fs = require('fs');
+const script = fs.readFileSync(0, 'utf8');
+const encoded = JSON.parse(process.env.NUXT_FIXTURE);
+global.window = {};
+global.location = {
+  href: 'https://www.kkday.com/zh-tw/product/135034',
+  pathname: '/zh-tw/product/135034'
+};
+global.document = {
+  title: 'Sanitized product',
+  scripts: [{textContent: JSON.stringify(encoded)}],
+  querySelector: () => null,
+  createElement: () => ({innerHTML: '', querySelectorAll: () => []})
+};
+const result = eval(`(${script})`)();
+process.stdout.write(JSON.stringify(result));
+"""
+    def execute(payload: str) -> dict | None:
+        completed = subprocess.run(
+            ["node", "-e", runner],
+            input=SNAPSHOT_SCRIPT,
+            text=True,
+            capture_output=True,
+            check=True,
+            env={**os.environ, "NUXT_FIXTURE": payload},
+        )
+        return json.loads(completed.stdout)
+
+    assert '"pkg_oid"' not in encoded
+    raw = execute(encoded)
+    assert raw["productId"] == "135034"
+    assert raw["packages"] == []
+    assert raw["packageIds"] == ["900001", "900002"]
+
+    mismatched = json.loads(encoded)
+    mismatched[6] = "135035"
+    assert execute(json.dumps(mismatched)) is None
+
+
+def test_snapshot_rejects_metadata_for_a_different_product() -> None:
+    raw = load_fixture("product_snapshot_149025.json")
+    raw["packages"] = []
+
+    with pytest.raises(SchemaDriftError, match="商品 ID 与页面不一致"):
+        extract_product_snapshot(
+            FakePage(raw),
+            raw["url"],
+            package_data={
+                "PRODUCT-SETTING": {"prod_mid": 149026},
+                "PACKAGE": {},
+                "ITEM": {},
+            },
+        )
+
+
 def test_scrape_reports_empty_packages_separately_from_schema_drift(
     tmp_path: Path,
 ) -> None:
@@ -143,7 +326,8 @@ def test_scrape_reports_empty_packages_separately_from_schema_drift(
     raw["packages"] = []
     page = FakePage(raw)
 
-    result = ProductScraper(page, FakeApi()).scrape(
+    api = FakeApi()
+    result = ProductScraper(page, api).scrape(
         InputItem(url=page.url),
         probe(page),
         RunConfig(date(2026, 7, 22), tmp_path),
@@ -151,6 +335,7 @@ def test_scrape_reports_empty_packages_separately_from_schema_drift(
 
     assert result.failures[0].kind is FailureKind.NO_PACKAGES
     assert result.failures[0].retryable is False
+    assert api.packages_calls == ["149025"]
 
 
 def test_scrape_calls_each_package_once_and_returns_available_prices(

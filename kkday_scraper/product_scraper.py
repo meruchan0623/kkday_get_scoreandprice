@@ -46,7 +46,7 @@ SNAPSHOT_SCRIPT = r"""
   if (!option || !option.packages) {
     const payloadText = Array.from(document.scripts)
       .map(node => node.textContent || "")
-      .find(text => text.includes('"option-section"') && text.includes('"pkg_oid"'));
+      .find(text => text.includes('"option-section"'));
     if (!payloadText) return null;
     let encoded;
     try { encoded = JSON.parse(payloadText); } catch (_) { return null; }
@@ -70,16 +70,20 @@ SNAPSHOT_SCRIPT = r"""
     const packageIds = new Set();
     const packageById = new Map();
     const visited = new Set();
-    const walk = (value) => {
+    let hasMatchingProductResource = false;
+    const walk = (value, resourceName = "") => {
       if (!value || typeof value !== "object" || visited.has(value)) return;
       visited.add(value);
-      if (value.prodInfo && String(value.prodInfo.prod_mid || "") === productId) {
+      // Only a matching decoded PRODUCT resource may authorize the metadata
+      // fallback; a URL alone must not be trusted for an empty package list.
+      if (resourceName === "PRODUCT" && value.prodInfo && String(value.prodInfo.prod_mid || "") === productId) {
+        hasMatchingProductResource = true;
         for (const id of value.prodInfo.packages || []) packageIds.add(String(id));
       }
       if (value.pkg_oid != null && Array.isArray(value.items)) {
         packageById.set(String(value.pkg_oid), value);
       }
-      for (const child of Object.values(value)) walk(child);
+      for (const [key, child] of Object.entries(value)) walk(child, key);
     };
     walk(root);
     const packages = Array.from(packageIds)
@@ -91,12 +95,16 @@ SNAPSHOT_SCRIPT = r"""
         itemIds: (pkg.items || []).map(item => String(item)),
         description: ""
       }));
-    if (!productId || !packages.length) return null;
+    // Recent Nuxt pages defer PACKAGE/ITEM resources to fetch-packages-data.
+    // Return product SSR metadata with an empty package list so Python can
+    // fetch and validate that first-party resource; do not fall back to DOM.
+    if (!productId || !hasMatchingProductResource) return null;
     const title = (document.querySelector("h1") && document.querySelector("h1").textContent.trim()) || document.title;
     return {
       productId, url: location.href, name: String(title || ""), destination: "",
       rating: null, reviewCount: null, soldCount: null, wishlistCount: null,
-      pageMinPrice: null, confirmation: "", cancellationPolicy: "", features: [], packages
+      pageMinPrice: null, confirmation: "", cancellationPolicy: "", features: [],
+      packageIds: Array.from(packageIds), packages
     };
   }
   const productStore = window.__NUXT__.pinia.product && window.__NUXT__.pinia.product.product;
@@ -133,6 +141,7 @@ SNAPSHOT_SCRIPT = r"""
         .map(node => String(node.textContent || "").trim())
         .filter(Boolean);
     })(),
+    packageIds: packageIds.map(String),
     packages: orderedPackages.map(pkg => ({
       packageId: String(pkg.pkg_oid),
       name: String(pkg.name || ""),
@@ -155,6 +164,10 @@ class PageLike(Protocol):
 
     def evaluate(self, expression: str) -> dict | None: ...
 
+    def arm_passive_package_graph(self, product_url: str) -> None: ...
+
+    def read_passive_package_graph(self) -> dict | None: ...
+
 
 PAGE_DIAGNOSTIC_SCRIPT = r"""
 () => {
@@ -169,7 +182,7 @@ PAGE_DIAGNOSTIC_SCRIPT = r"""
       window.__NUXT__?.pinia?.["option-section"]?.packages ||
       Array.from(document.scripts).some(node => {
         const value = node.textContent || "";
-        return value.includes('"option-section"') && value.includes('"pkg_oid"');
+        return value.includes('"option-section"');
       })
     )
   };
@@ -181,11 +194,60 @@ class NoPackagesError(ValueError):
     """The product exists, but exposes no currently scrapeable packages."""
 
 
-def extract_product_snapshot(page: PageLike, url: str) -> ProductSnapshot:
-    raw = page.evaluate(SNAPSHOT_SCRIPT)
+def extract_product_snapshot(
+    page: PageLike,
+    url: str,
+    package_data: dict | None = None,
+    raw_snapshot: dict | None = None,
+) -> ProductSnapshot:
+    raw = raw_snapshot if raw_snapshot is not None else page.evaluate(SNAPSHOT_SCRIPT)
     if not raw or "packages" not in raw:
         raise SchemaDriftError("Nuxt option-section 缺少商品或套餐结构")
-    if not raw["packages"]:
+    raw_packages = raw["packages"]
+    if not raw_packages and package_data is not None:
+        setting = package_data.get("PRODUCT-SETTING")
+        metadata_product_id = (
+            str(setting.get("prod_mid") or "") if isinstance(setting, dict) else ""
+        )
+        expected_product_id = str(
+            raw.get("productId") or extract_product_id_from_url(url) or ""
+        )
+        if not metadata_product_id or metadata_product_id != expected_product_id:
+            raise SchemaDriftError("fetch-packages-data 商品 ID 与页面不一致")
+        package_map = package_data.get("PACKAGE")
+        item_map = package_data.get("ITEM")
+        if not isinstance(package_map, dict) or not isinstance(item_map, dict):
+            raise SchemaDriftError("fetch-packages-data 缺少 PACKAGE/ITEM 结构")
+        expected_package_ids = tuple(str(value) for value in raw.get("packageIds", []))
+        if not expected_package_ids:
+            if package_map:
+                raise SchemaDriftError("Nuxt PRODUCT 缺少套餐资源引用")
+            raw_packages = []
+        raw_packages = []
+        for package_id in expected_package_ids:
+            package = package_map.get(package_id)
+            if not isinstance(package, dict):
+                raise SchemaDriftError("fetch-packages-data 缺少 PRODUCT 引用的套餐")
+            if str(package.get("pkg_oid") or "") != package_id:
+                raise SchemaDriftError("fetch-packages-data 套餐 ID 与资源键不一致")
+            item_ids = tuple(str(value) for value in package.get("items", []))
+            if not item_ids:
+                raise SchemaDriftError("fetch-packages-data 套餐缺少 item 引用")
+            for item_id in item_ids:
+                item = item_map.get(item_id)
+                if not isinstance(item, dict):
+                    raise SchemaDriftError("fetch-packages-data 套餐引用未知 item ID")
+                if str(item.get("item_oid") or "") != item_id:
+                    raise SchemaDriftError("fetch-packages-data item ID 与资源键不一致")
+            raw_packages.append(
+                {
+                    "packageId": package_id,
+                    "name": str(package.get("name") or ""),
+                    "itemIds": item_ids,
+                    "description": "",
+                }
+            )
+    if not raw_packages:
         raise NoPackagesError("商品当前没有可抓取套餐")
     url_product_id = extract_product_id_from_url(url)
     page_product_id = str(raw.get("productId") or "")
@@ -203,7 +265,7 @@ def extract_product_snapshot(page: PageLike, url: str) -> ProductSnapshot:
             item_ids=tuple(str(item_id) for item_id in package.get("itemIds", [])),
             description=str(package.get("description") or ""),
         )
-        for package in raw["packages"]
+        for package in raw_packages
     )
     if any(not package.package_id or not package.item_ids for package in packages):
         raise SchemaDriftError("Nuxt 套餐缺少 package ID 或 item ID")
@@ -321,22 +383,58 @@ class ProductScraper:
 
         response = None
         try:
+            # This hook is deliberately armed before navigation.  It passively
+            # retains the normal frontend's verified fetch-packages-data graph
+            # in page memory, so pages with no SSR payload can still pass the
+            # product readiness gate without replaying a request.
+            arm_graph = getattr(self.page, "arm_passive_package_graph", None)
+            if callable(arm_graph):
+                arm_graph(input_item.url)
             response = self.page.goto(
                 input_item.url,
                 wait_until="domcontentloaded",
                 timeout=60_000,
             )
-            self.page.wait_for_function(
-                """() => Boolean(
-                    window.__NUXT__?.pinia?.['option-section']?.packages ||
-                    Array.from(document.scripts).some(node => {
-                        const value = node.textContent || '';
-                        return value.includes('option-section') && value.includes('pkg_oid');
-                    })
-                )""",
-                timeout=45_000,
+            passive_graph = None
+            # EgoPage returns the normal-load graph in the same invocation as
+            # navigation.  Consume that cached snapshot first: a separate CLI
+            # evaluate may attach to a later page lifetime and see no observer.
+            read_graph = getattr(self.page, "read_passive_package_graph", None)
+            if callable(read_graph):
+                passive_graph = read_graph()
+            if isinstance(passive_graph, dict) and passive_graph.get("packages"):
+                selected_snapshot = passive_graph
+            else:
+                self.page.wait_for_function(
+                    """() => Boolean(
+                        window.__NUXT__?.pinia?.['option-section']?.packages ||
+                        Array.from(document.scripts).some(node => {
+                            const value = node.textContent || '';
+                            return value.includes('option-section');
+                        })
+                    )""",
+                    timeout=45_000,
+                )
+                selected_snapshot = self.page.evaluate(SNAPSHOT_SCRIPT)
+            if not isinstance(selected_snapshot, dict) or "packages" not in selected_snapshot:
+                raise SchemaDriftError("Nuxt option-section 缺少商品或套餐结构")
+            product_id = str(selected_snapshot.get("productId") or extract_product_id_from_url(input_item.url) or "")
+            metadata = None
+            # The passive graph itself is an exact-request, response-validated
+            # authority.  Only the older SSR-empty path needs an API fallback.
+            if not selected_snapshot.get("packages"):
+                payload = self._read_with_retry(
+                    lambda: self.api.fetch_packages_data(
+                        product_id, config.usage_date, config.usage_date
+                    ),
+                    config,
+                )
+                metadata = payload.get("data")
+                if not isinstance(metadata, dict):
+                    raise ApiSchemaError("fetch-packages-data 缺少 data 结构")
+            snapshot = extract_product_snapshot(
+                self.page, input_item.url, metadata, raw_snapshot=selected_snapshot
             )
-            snapshot = extract_product_snapshot(self.page, input_item.url)
             publish(product_page_ready=True, reason=None)
         except NoPackagesError as exc:
             publish(product_page_ready=True, reason=str(exc))

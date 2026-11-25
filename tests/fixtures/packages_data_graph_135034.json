@@ -1,0 +1,13 @@
+{
+  "PRODUCT-SETTING": {"prod_mid": 135034},
+  "PACKAGE": {
+    "900001": {"pkg_oid": 900001, "name": "First", "items": [910001]},
+    "900002": {"pkg_oid": 900002, "name": "Second", "items": [910002]},
+    "unrelated": {"pkg_oid": "unrelated", "name": "Ignore", "items": [919999]}
+  },
+  "ITEM": {
+    "910001": {"item_oid": 910001},
+    "910002": {"item_oid": 910002},
+    "919999": {"item_oid": 919999}
+  }
+}
