@@ -6,12 +6,115 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
-from .cookie_store import ALLOWED_COOKIE_NAMES, load_preference_cookies
 from .models import RunConfig, SessionProbe, market_homepage
 
 
 RESULT_MARKER = "__KKDAY_EGO_RESULT__"
 Runner = Callable[[list[str], str, float], tuple[int, str, str]]
+
+
+def passive_package_graph_init_source(product_url: str) -> str:
+    """Return a new-document hook that retains only a verified package graph.
+
+    The hook observes the browser's ordinary frontend request.  It neither
+    initiates a request nor exports a response body: reduced IDs and names live
+    only in the current page's JavaScript heap.
+    """
+    target = json.dumps(product_url)
+    return f"""
+(() => {{
+  const target = new URL({target});
+  const productId = target.pathname.match(/\\/product\\/(\\d+)/)?.[1] || "";
+  const pageMatches = () => location.origin === target.origin && location.pathname === target.pathname;
+  const requestMatches = (url) => {{
+    try {{
+      const request = new URL(url, location.href);
+      return pageMatches() && request.origin === target.origin &&
+        request.pathname === "/api/_nuxt/product/fetch-packages-data" &&
+        request.searchParams.get("prodMid") === productId;
+    }} catch (_) {{ return false; }}
+  }};
+  const retain = (payload) => {{
+    const observer = window.__kkdayPassivePackageObserver;
+    // A successful transport alone is not authority for the resource graph.
+    // KKday's normal frontend response must also report application success.
+    if (!payload || (payload.message !== "success" && payload.result !== "BASE_SUCCESS")) {{
+      observer.lastRejection = "app_success";
+      return;
+    }}
+    const data = payload && payload.data;
+    const setting = data && data["PRODUCT-SETTING"];
+    // The observed contract exposes prod_mid as a JSON number.  A string is
+    // deliberately rejected so a changed response shape cannot be accepted.
+    if (!Number.isSafeInteger(setting?.prod_mid) || String(setting.prod_mid) !== productId) {{
+      observer.lastRejection = "shape_product";
+      return;
+    }}
+    const packageMap = data.PACKAGE;
+    const itemMap = data.ITEM;
+    if (!packageMap || typeof packageMap !== "object" || !itemMap || typeof itemMap !== "object") {{
+      observer.lastRejection = "shape_maps";
+      return;
+    }}
+    const packages = [];
+    for (const [packageId, pkg] of Object.entries(packageMap)) {{
+      if (!pkg || !Number.isSafeInteger(pkg.pkg_oid) || String(pkg.pkg_oid) !== packageId || !Array.isArray(pkg.items) || !pkg.items.length) {{
+        observer.lastRejection = "shape_package";
+        return;
+      }}
+      const itemIds = [];
+      for (const itemId of pkg.items) {{
+        const key = String(itemId);
+        const item = itemMap[key];
+        if (!item || !Number.isSafeInteger(item.item_oid) || String(item.item_oid) !== key) {{
+          observer.lastRejection = "shape_item";
+          return;
+        }}
+        itemIds.push(key);
+      }}
+      packages.push({{ packageId, name: String(pkg.name || ""), itemIds, description: "" }});
+    }}
+    if (!packages.length) {{ observer.lastRejection = "shape_empty"; return; }}
+    window.__kkdayPassivePackageGraph = {{ productId, packages }};
+    observer.accepted = true;
+  }};
+  const observe = (url, response) => {{
+    const observer = window.__kkdayPassivePackageObserver;
+    if (!requestMatches(url)) return;
+    observer.events += 1;
+    if (!response?.ok) {{ observer.lastRejection = "http"; return; }}
+    response.clone().text().then((text) => retain(JSON.parse(text))).catch(() => {{ observer.lastRejection = "parse"; }});
+  }};
+  const fetch = window.fetch.bind(window);
+  window.fetch = async (...args) => {{
+    const response = await fetch(...args);
+    observe(response.url, response);
+    return response;
+  }};
+  const open = XMLHttpRequest.prototype.open;
+  const send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) {{
+    this.__kkdayPassiveGraphUrl = String(url);
+    return open.call(this, method, url, ...rest);
+  }};
+  XMLHttpRequest.prototype.send = function(...args) {{
+    this.addEventListener("loadend", () => {{
+      const observer = window.__kkdayPassivePackageObserver;
+      if (!requestMatches(this.__kkdayPassiveGraphUrl)) return;
+      observer.events += 1;
+      if (this.status < 200 || this.status >= 300) {{ observer.lastRejection = "http"; return; }}
+      try {{
+        // XHR may be configured for either JSON or text.  responseText throws
+        // for responseType=json, so never make text-only assumptions here.
+        const body = this.responseType === "json" ? this.response : this.responseText;
+        retain(typeof body === "string" ? JSON.parse(body) : body);
+      }} catch (_) {{ observer.lastRejection = "parse"; }}
+    }}, {{ once: true }});
+    return send.apply(this, args);
+  }};
+  window.__kkdayPassivePackageObserver = {{ installed: true, events: 0, accepted: false, lastRejection: "" }};
+}})();
+"""
 
 
 class EgoBrowserError(RuntimeError):
@@ -135,6 +238,8 @@ class EgoPage:
     def __init__(self, bridge: "EgoBrowserBridge") -> None:
         self.bridge = bridge
         self._url = ""
+        self._pending_passive_graph_url: str | None = None
+        self._passive_package_graph: object = None
 
     @property
     def url(self) -> str:
@@ -142,29 +247,85 @@ class EgoPage:
 
     def goto(self, url: str, **kwargs: object) -> None:
         timeout_ms = int(kwargs.get("timeout") or self.bridge.config.request_timeout_ms)
+        if self._pending_passive_graph_url == url:
+            self._pending_passive_graph_url = None
+            self._goto_with_passive_package_graph(url, timeout_ms)
+            return
         result = self.bridge._task_call(
             f"""
-const tab = await ensureRealTab()
-if (tab) {{ await gotoAndWait({json.dumps(url)}, {{ timeout: {max(1, timeout_ms // 1000)}, settle: 1 }}) }}
-else {{ await openOrReuseTab({json.dumps(url)}, {{ wait: true, timeout: {max(1, timeout_ms // 1000)} }}) }}
-const info = await pageInfo()
-cliLog({json.dumps(RESULT_MARKER)} + JSON.stringify({{ url: info.url || {json.dumps(url)} }}))
+await page.goto({json.dumps(url)}, {{ timeout: {timeout_ms} }})
+cliLog({json.dumps(RESULT_MARKER)} + JSON.stringify({{ url: await page.url() }}))
 """,
             timeout=max(30.0, timeout_ms / 1000 + 15),
         )
         self._url = str(result.get("url") or url)
 
-    def evaluate(self, expression: str, arg: object = None) -> object:
-        source = json.dumps(expression)
-        argument = json.dumps(arg, ensure_ascii=False, default=str)
+    def arm_passive_package_graph(self, product_url: str) -> None:
+        """Schedule a passive observer for the immediately following navigation.
+
+        Arming, navigation, polling, and result retrieval must share one
+        ``ego-browser nodejs`` invocation: a separate CLI call can lose the
+        new-document observer's page heap before the graph is read.
+        """
+        self._pending_passive_graph_url = product_url
+
+    def _goto_with_passive_package_graph(self, url: str, timeout_ms: int) -> None:
+        source = json.dumps(passive_package_graph_init_source(url))
         result = self.bridge._task_call(
             f"""
-await ensureRealTab()
+await page.cdp("Page.addScriptToEvaluateOnNewDocument", {{ source: {source} }})
+await page.goto({json.dumps(url)}, {{ timeout: {timeout_ms} }})
+let passive = null;
+let passiveDiagnostics = null;
+for (let attempt = 0; attempt < 30; attempt += 1) {{
+  // Function literals are executed by Ego; string expressions are data in
+  // some Ego versions.  Keep retrieval in this same CLI invocation.
+  passive = await page.evaluate(() => {{
+    const graph = window.__kkdayPassivePackageGraph;
+    const observer = window.__kkdayPassivePackageObserver;
+    const heading = document.querySelector('h1');
+    const h1 = String(heading?.textContent || '').trim();
+    const diagnostics = {{
+      observer: Boolean(observer?.installed), h1: Boolean(h1),
+      eventCount: Number(observer?.events || 0),
+      rejection: String(observer?.lastRejection || ''),
+      graph: Boolean(graph?.packages?.length)
+    }};
+    if (!graph?.packages?.length || !h1) return {{ graph: null, diagnostics }};
+    return {{ graph: {{
+      productId: String(graph.productId || ''), url: location.href, name: h1,
+      destination: '', rating: null, reviewCount: null, soldCount: null,
+      wishlistCount: null, pageMinPrice: null, confirmation: '',
+      cancellationPolicy: '', features: [], packages: graph.packages
+    }}, diagnostics }};
+  }});
+  passiveDiagnostics = passive?.diagnostics || passiveDiagnostics;
+  if (passive?.graph) break;
+  await page.waitForTimeout(250);
+}}
+cliLog({json.dumps(RESULT_MARKER)} + JSON.stringify({{
+  url: await page.url(), passiveGraph: passive?.graph || null,
+  passiveDiagnostics: passiveDiagnostics || {{ observer: false, h1: false, eventCount: 0, rejection: '', graph: false }}
+}}))
+""",
+            timeout=max(30.0, timeout_ms / 1000 + 20),
+        )
+        self._url = str(result.get("url") or url)
+        self._passive_package_graph = result.get("passiveGraph")
+
+    def read_passive_package_graph(self) -> object:
+        return self._passive_package_graph
+
+    def evaluate(self, expression: str, arg: object = None) -> object:
+        argument = json.dumps(arg, ensure_ascii=False, default=str)
+        source = json.dumps(f"({expression})({argument})")
+        result = self.bridge._task_call(
+            f"""
 const source = {source}
-const argument = {argument}
-const value = await js('(' + source + ')(' + JSON.stringify(argument) + ')')
-const info = await pageInfo()
-cliLog({json.dumps(RESULT_MARKER)} + JSON.stringify({{ value, url: info.url || '' }}))
+// A function literal is executable in Ego.  The source stays data until this
+// wrapper deliberately evaluates it in the page's own realm.
+const value = await page.evaluate((source) => (0, eval)(source), source)
+cliLog({json.dumps(RESULT_MARKER)} + JSON.stringify({{ value, url: await page.url() }}))
 """
         )
         self._url = str(result.get("url") or self._url)
@@ -175,17 +336,8 @@ cliLog({json.dumps(RESULT_MARKER)} + JSON.stringify({{ value, url: info.url || '
         source = json.dumps(expression)
         self.bridge._task_call(
             f"""
-await ensureRealTab()
 const source = {source}
-const timeoutMs = {timeout_ms}
-const value = await js(`(async () => {{
-  const deadline = Date.now() + ${{{timeout_ms}}};
-  while (Date.now() < deadline) {{
-    if (await (${{source}})()) return true;
-    await new Promise(resolve => setTimeout(resolve, 200));
-  }}
-  throw new Error('wait_for_function timeout');
-}})()`)
+const value = await page.waitForFunction(source, undefined, {{ timeout: {timeout_ms} }})
 cliLog({json.dumps(RESULT_MARKER)} + JSON.stringify({{ value }}))
 """,
             timeout=max(30.0, timeout_ms / 1000 + 15),
@@ -227,7 +379,8 @@ class EgoBrowserBridge:
     def _task_call(self, body: str, timeout: float = 75.0) -> dict[str, Any]:
         selector: object = self.task_space_id if self.task_space_id is not None else self.task_space_name
         return self._invoke(
-            f"const task = await useOrCreateTaskSpace({json.dumps(selector)})\n{body}",
+            f"const task = await taskSpace({json.dumps(selector)})\n"
+            f"const page = task.page('p1')\n{body}",
             timeout,
         )
 
@@ -235,21 +388,11 @@ class EgoBrowserBridge:
         if self._connected:
             return
         homepage = market_homepage(self.config.market)
-        cookies = [c for c in load_preference_cookies() if c.get("name") in ALLOWED_COOKIE_NAMES]
-        cookie_script = ""
-        for cookie in cookies:
-            params = {
-                "name": cookie["name"], "value": cookie["value"],
-                "domain": cookie["domain"], "path": cookie["path"],
-                "secure": True, "httpOnly": bool(cookie.get("httpOnly", True)),
-            }
-            cookie_script += f"await cdp('Network.setCookie', {json.dumps(params, ensure_ascii=False)})\n"
         result = self._task_call(
             f"""
-await openOrReuseTab({json.dumps(homepage)}, {{ wait: true, timeout: 60 }})
-{cookie_script}const info = await pageInfo()
+await page.goto({json.dumps(homepage)}, {{ timeout: 60_000 }})
 cliLog({json.dumps(RESULT_MARKER)} + JSON.stringify({{
-  taskSpaceId: task.id, taskSpaceName: task.name || {json.dumps(self.task_space_name)}, url: info.url || ''
+  taskSpaceId: task.spaceId, taskSpaceName: task.name || {json.dumps(self.task_space_name)}, url: await page.url()
 }}))
 """,
             timeout=90.0,
@@ -277,8 +420,9 @@ cliLog({json.dumps(RESULT_MARKER)} + JSON.stringify({{
             return
         selector: object = self.task_space_id if self.task_space_id is not None else self.task_space_name
         result = self._invoke(
-            f"const result = await completeTaskSpace({json.dumps(selector)}, {{ keep: false }})\n"
-            f"cliLog({json.dumps(RESULT_MARKER)} + JSON.stringify(result))\n"
+            f"const task = await taskSpace({json.dumps(selector)})\n"
+            "await task.finish({ keep: [] })\n"
+            f"cliLog({json.dumps(RESULT_MARKER)} + JSON.stringify({{ done: true }}))\n"
         )
         if result.get("done") is not True:
             raise EgoBrowserError("ego-browser task space 清理未完成")

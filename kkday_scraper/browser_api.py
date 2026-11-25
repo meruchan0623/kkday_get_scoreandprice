@@ -49,6 +49,54 @@ async ({ path, market, timeoutMs }) => {
 """
 
 
+# The frontend has already made this public request while loading the current
+# product.  Reuse only its same-origin, allowlisted URL after checking that it
+# names the product we are scraping.  In particular, do not reconstruct a
+# query from guesses or copy credentials/headers into Python.
+ORIGINAL_PACKAGES_DATA_SCRIPT = """
+async ({ expectedProdMid, market, timeoutMs }) => {
+  const endpoint = "/api/_nuxt/product/fetch-packages-data";
+  const isPublicQuery = (url) => {
+    for (const [key, value] of url.searchParams) {
+      // Some public frontend URLs carry this empty flag.  A value would be a
+      // credential-like token and is never replayed.
+      if (key === "previewToken" && value === "") continue;
+      if (/token|auth|cookie|session|signature|secret|key/i.test(key)) return false;
+      if (key === "prodMid" && value === expectedProdMid) continue;
+      if ((key === "beginDate" || key === "endDate") && /^\\d{4}-\\d{2}-\\d{2}$/.test(value)) continue;
+      if (key === "platform" && /^[A-Z_]{1,32}$/.test(value)) continue;
+      if (key === "extendedTimeout" && /^(true|false)$/.test(value)) continue;
+      return false;
+    }
+    return true;
+  };
+  let path = null;
+  for (const entry of performance.getEntriesByType("resource").slice().reverse()) {
+    let url;
+    try { url = new URL(entry.name); } catch (_) { continue; }
+    if (url.origin !== location.origin || url.pathname !== endpoint) continue;
+    if (url.searchParams.get("prodMid") !== expectedProdMid || !isPublicQuery(url)) continue;
+    path = url.pathname + url.search;
+    break;
+  }
+  if (!path) return { source: "not_found" };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(path, {
+      method: "GET", credentials: "include", headers: { market }, signal: controller.signal
+    });
+    return {
+      source: "performance", status: response.status,
+      contentType: response.headers.get("content-type") || "", text: await response.text()
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+"""
+
+
 class BrowserApiClient:
     def __init__(self, page: PageLike, market: str, timeout_ms: int) -> None:
         self.page = page
@@ -77,6 +125,9 @@ class BrowserApiClient:
             raise BrowserApiError(
                 f"浏览器内请求失败：{type(exc).__name__}: {exc}"
             ) from exc
+        return self._decode_json_response(raw)
+
+    def _decode_json_response(self, raw: object) -> dict:
         if not isinstance(raw, dict):
             raise ApiSchemaError("KKday API 返回了未知响应结构")
 
@@ -110,6 +161,33 @@ class BrowserApiClient:
             f"&prodOid={quote(product_id)}"
             "&previewToken"
         )
+
+    def fetch_packages_data(
+        self, product_id: str, begin_date: date, end_date: date
+    ) -> dict:
+        """Reuse the current page's verified public package graph request.
+
+        Dates are deliberately not synthesized here: the loaded frontend URL
+        is the contract.  No candidate means schema drift, rather than a
+        request replay with an invented query shape.
+        """
+        del begin_date, end_date
+        try:
+            raw = self.page.evaluate(
+                ORIGINAL_PACKAGES_DATA_SCRIPT,
+                {
+                    "expectedProdMid": str(product_id),
+                    "market": self.market,
+                    "timeoutMs": self.timeout_ms,
+                },
+            )
+        except Exception as exc:
+            raise BrowserApiError(
+                f"浏览器内读取原始套餐资源失败：{type(exc).__name__}: {exc}"
+            ) from exc
+        if isinstance(raw, dict) and raw.get("source") == "not_found":
+            raise ApiSchemaError("当前商品页未发现已验证的公开 fetch-packages-data 请求")
+        return self._decode_json_response(raw)
 
     def fetch_items_data(
         self,
